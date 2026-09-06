@@ -293,10 +293,20 @@ export class Inbox extends DurableObject<Env> {
     }
     const pair = new WebSocketPair();
     this.ctx.acceptWebSocket(pair[1], [name]); // the server end: its messages arrive in webSocketMessage
-    this.sockets.set(name, pair[1]);
     this.forgetTarget(name);
     void this.deliverNextFrame(name);
     return new Response(null, { status: 101, webSocket: pair[0] }); // the client end rides back to the laptop
+  }
+
+  /**
+   * The socket a target holds, by its accept tag — looked up from the runtime, not from this
+   * instance's memory: the DO hibernates and evicts, but its accepted sockets survive it, and
+   * any instance that wakes holds the target's socket all the same. A newer connection replaces
+   * an older one (its frames would answer into a void), so the most recently accepted counts.
+   */
+  private socketOf(name: string): WebSocket | undefined {
+    const sockets = this.ctx.getWebSockets(name);
+    return sockets.length === 0 ? undefined : sockets[sockets.length - 1];
   }
 
   /** One message from a laptop on its socket: the answer to the frame it holds. */
@@ -354,10 +364,10 @@ export class Inbox extends DurableObject<Env> {
     await this.wake();
   }
 
-  /** The socket dropped: forget it, and leave the frame it held pending — nothing is lost, nothing is retried into a void. */
+  /** The socket dropped: the runtime prunes it from getWebSockets; the frame it held stays pending. */
   private socketClosed(name: string, ws: WebSocket): void {
-    const held = this.sockets.get(name);
-    if (held === ws) this.sockets.delete(name);
+    void name;
+    void ws;
   }
 
   /**
@@ -410,7 +420,7 @@ export class Inbox extends DurableObject<Env> {
     if (this.heldBy(name) !== 0) return;
     const head = this.socketHead(name);
     if (!head) return;
-    const socket = this.sockets.get(name);
+    const socket = this.socketOf(name);
     if (!socket) {
       if (head.ready) this.sql.exec('UPDATE deliveries SET next_attempt_s = ? WHERE id = ?', Date.now() + SOCKET_RESEND_MS, head.id);
       return;
@@ -420,7 +430,7 @@ export class Inbox extends DurableObject<Env> {
 
   /** Send one delivery down the target's socket and hold it there; false when the queue must hold. */
   private async socketSend(name: string, deliveryId: number): Promise<boolean> {
-    const socket = this.sockets.get(name);
+    const socket = this.socketOf(name);
     if (!socket) return false;
     const rows = this.sql.exec(
       `SELECT d.attempts AS attempts, e.id AS event_id, e.headers AS headers, e.body AS body
@@ -452,8 +462,7 @@ export class Inbox extends DurableObject<Env> {
     for (const row of rows) {
       const name = String(row.name);
       const held = Number(row.pending);
-      const socket = this.sockets.get(name);
-      if (!socket) continue;
+      if (!this.socketOf(name)) continue;
       const due = this.sql.exec('SELECT next_attempt_s FROM deliveries WHERE id = ?', held).toArray()[0];
       if (due && Number(due.next_attempt_s) <= now) await this.socketSend(name, held);
     }
@@ -628,9 +637,6 @@ export class Inbox extends DurableObject<Env> {
 
   /** Guard against two runs of one target interleaving (an alarm and an attach waking it at once). */
   private readonly running = new Set<string>();
-
-  /** The socket each attached laptop holds, by target name — the laptop connects out; the inbox holds it. */
-  private readonly sockets = new Map<string, WebSocket>();
 }
 
 /** A single path segment after `skip` bytes, decoded. A malformed encoding fails loudly. */
