@@ -1,6 +1,14 @@
 # Changelog
 
 ## Unreleased
+- Anything delivered can be delivered again, as a replay: `POST /events/<id>/replay` with `{"target": <name>}`
+  delivers that event to that target again, and `POST /targets/<name>/replay?from=<event id>` (that event and
+  everything after it) or `?since=<ISO time>` replays a range, in order. A replay is a distinct delivery row — it
+  rides the queue behind the originals with the same retries and recorded attempts, marked `X-Hookline-Replay: true`
+  on the wire and `replay: true` on every attempt on the event's record. A replay while an earlier one is still in
+  flight is the same delivery; asking again after one finished delivers again. Proven in the world: a replayed event
+  reaches the target's `/received` again with `X-Hookline-Replay: true`, a range replays in arrival order, and the
+  event's record shows the replay distinct from the original.
 - GitHub's and Polar's signatures are verified: an event delivered to `/in/github` is checked with GitHub's own scheme —
   the `X-Hub-Signature-256` header (`sha256=`, HMAC-SHA256 over the body keyed by `GITHUB_WEBHOOK_SECRET`) — and an event
   delivered to `/in/polar` with the Standard Webhooks scheme Polar signs (`webhook-id`/`webhook-timestamp`/
