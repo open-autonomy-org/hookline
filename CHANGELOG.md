@@ -5,7 +5,8 @@
   `GET /` (the page), `GET /events`, `GET /events/<id>`, `GET /targets`, `PUT /targets/<name>`, every `/replay`
   route, and the websocket a `hookline listen` target connects with, presented as `Authorization: Bearer <token>`
   (`?token=` on the socket handshake). A guarded request without it is refused 401 with one line and nothing about
-  the inbox's contents; the vendor doors stay open (`POST /in/<source>` needs no token — a vendor cannot send one —
+  the inbox's contents; a browser is shown that one line plus a form that asks for the token, which the page then
+  keeps in local storage. The vendor doors stay open (`POST /in/<source>` needs no token — a vendor cannot send one —
   and `GET /api` answers `{name, version}` to anyone), and `GET /healthz` answers the world's readiness probe. The
   page asks for the token once and keeps it in the browser's local storage; `hookline listen` takes it as `--token`
   (or `HOOKLINE_READ_TOKEN` in its environment) and puts it on the socket handshake. With the secret unset the
