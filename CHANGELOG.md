@@ -1,6 +1,15 @@
 # Changelog
 
 ## Unreleased
+- Deploy in a minute: the README walks from a fresh clone to `bunx wrangler deploy` (with
+  `--define HOOKLINE_VERSION:"\"$(git rev-parse --short HEAD)\""` so the Worker says what version it runs), a vendor
+  pointed at the inbox's address, the secrets set through `wrangler secret put`, and the first event on `/events` —
+  every command in it the one that works. The Worker itself has a face now: `GET /` serves the operator's page — the
+  events newest first, each with its signature verdict and the reason when unverified, each target's recorded
+  attempts, a replay button that calls `POST /events/<id>/replay` — with no build step (one static HTML document
+  whose script reads the same API everything else reads), and `GET /api` answers `{name, version}`. Proven in the
+  world: the page served with the events' verification and deliveries shown and a replay made from it reaching the
+  target's `/received`, `/api` answering the deployed rev, and the README's path walked fresh-clone to first event.
 - Anything delivered can be delivered again, as a replay: `POST /events/<id>/replay` with `{"target": <name>}`
   delivers that event to that target again, and `POST /targets/<name>/replay?from=<event id>` (that event and
   everything after it) or `?since=<ISO time>` replays a range, in order. A replay is a distinct delivery row — it
