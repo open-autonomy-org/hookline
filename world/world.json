@@ -17,28 +17,6 @@
       "injectEnv": "STRIPE_TWIN_URL"
     },
     {
-      "id": "github",
-      "type": "twin",
-      "command": "bun",
-      "args": [
-        "node_modules/@volter/twin-github/src/cli.ts",
-        "serve"
-      ],
-      "port": "auto",
-      "injectEnv": "GITHUB_TWIN_URL"
-    },
-    {
-      "id": "polar",
-      "type": "twin",
-      "command": "bun",
-      "args": [
-        "node_modules/@volter/twin-polar/src/cli.ts",
-        "serve"
-      ],
-      "port": "auto",
-      "injectEnv": "POLAR_TWIN_URL"
-    },
-    {
       "id": "target",
       "type": "process",
       "command": "bun",
@@ -47,7 +25,6 @@
       ],
       "port": "auto",
       "portArg": false,
-      "rootArg": false,
       "injectEnv": "TARGET_URL",
       "ready": {
         "httpUrl": "${url}/healthz",
@@ -70,6 +47,34 @@
         "httpUrl": "${url}/healthz",
         "timeoutMs": 120000,
         "intervalMs": 500
+      }
+    },
+    {
+      "id": "github",
+      "type": "process",
+      "command": "bun",
+      "args": [
+        "world/github.ts"
+      ],
+      "port": "auto",
+      "portArg": false,
+      "injectEnv": "GITHUB_TWIN_URL",
+      "env": {
+        "HOOKLINE_GITHUB_WEBHOOK_SECRET": "twin_gh_hookline"
+      }
+    },
+    {
+      "id": "polar",
+      "type": "process",
+      "command": "bun",
+      "args": [
+        "world/polar.ts"
+      ],
+      "port": "auto",
+      "portArg": false,
+      "injectEnv": "POLAR_TWIN_URL",
+      "env": {
+        "HOOKLINE_POLAR_WEBHOOK_SECRET": "dHdpbl9wb2xhcl9ob29rbGluZQ"
       }
     }
   ]
