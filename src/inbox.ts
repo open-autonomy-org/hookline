@@ -9,7 +9,7 @@
 // (time, target, status, error). One target's run never waits on another's; the DO's single alarm
 // wakes whichever target has work due, and retries keep it driven while work remains.
 import { DurableObject } from 'cloudflare:workers';
-import { MAX_ATTEMPTS, nextDelayS, deliveryRequest, type Target } from './targets.ts';
+import { nextDelayS, deliveryRequest, type Target } from './targets.ts';
 import type { Env } from './worker.ts';
 
 /** No attempt is scheduled at or before this: the queue's floor is "now" (an alarm at 0 is an error). */
@@ -90,16 +90,20 @@ export class Inbox extends DurableObject<Env> {
       'INSERT INTO events (id, source, time, size, headers, body) VALUES (?, ?, ?, ?, ?, ?)',
       event.id, event.source, event.time, event.size, headers, body,
     );
-    this.enqueue(event.id);
+    this.enqueueAll();
     await this.wake();
     return Response.json({ id: event.id });
   }
 
-  /** Queue one event for every attached target; the queue is what the pump delivers from. */
-  private enqueue(eventId: string): void {
+  /**
+   * Queue every stored event for every attached target, where not already queued. One idempotent
+   * statement is the queue's single point of truth: receive, attach and the alarm all call it, so
+   * an event is never left stranded because a driver died between storing and enqueueing.
+   */
+  private enqueueAll(): void {
     this.sql.exec(
-      'INSERT OR IGNORE INTO deliveries (event_id, target, next_attempt_s, attempts, done) SELECT ?, name, 0, 0, 0 FROM targets',
-      eventId,
+      `INSERT OR IGNORE INTO deliveries (event_id, target, next_attempt_s, attempts, done)
+       SELECT events.id, targets.name, 0, 0, 0 FROM events CROSS JOIN targets`,
     );
   }
 
@@ -158,13 +162,7 @@ export class Inbox extends DurableObject<Env> {
       'INSERT INTO targets (name, url) VALUES (?, ?) ON CONFLICT (name) DO UPDATE SET url = excluded.url',
       name, url,
     );
-    const eventIds = this.sql.exec('SELECT id FROM events ORDER BY seq').toArray().map((row) => row.id as string);
-    for (const eventId of eventIds) {
-      this.sql.exec(
-        'INSERT INTO deliveries (event_id, target, next_attempt_s, attempts, done) VALUES (?, ?, 0, 0, 0) ON CONFLICT (event_id, target) DO NOTHING',
-        eventId, name,
-      );
-    }
+    this.enqueueAll();
     await this.wake();
     return Response.json({ name, url, targets: this.targets() });
   }

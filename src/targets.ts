@@ -5,10 +5,12 @@
 /** A target the inbox forwards to: a name, and the URL every stored event is POSTed to. */
 export interface Target { name: string; url: string }
 
-/** How long to wait before the next attempt: 1s, 5s, 30s, 2m, 10m, 1h, then hourly for a day. */
-export const RETRY_DELAYS_S = [1, 5, 30, 120, 600, 3600, 86400, 86400, 86400, 86400, 86400, 86400, 86400, 86400, 86400, 86400, 86400, 86400, 86400, 86400, 86400, 86400, 86400, 86400, 86400] as const;
+/** How long to wait before the next attempt: 1s, 5s, 30s, 2m, 10m, then hourly — 24 hourly waits, a day. */
+const FAST_S = [1, 5, 30, 120, 600] as const;
+const DAY_OF_HOURLY_WAITS = 24;
+export const RETRY_DELAYS_S: readonly number[] = [...FAST_S, ...Array<number>(DAY_OF_HOURLY_WAITS).fill(3600)];
 
-/** The delivery considered abandoned after this many attempts (the first six plus eighteen hourly retries). */
+/** The delivery considered abandoned after this many attempts (five fast waits plus a day of hourly ones). */
 export const MAX_ATTEMPTS = RETRY_DELAYS_S.length;
 
 /** Backoff before attempt n (1-based), in seconds; undefined when the policy is exhausted. */
