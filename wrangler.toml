@@ -1,0 +1,14 @@
+name = "hookline"
+main = "src/worker.ts"
+compatibility_date = "2026-06-15"
+workers_dev = true
+
+# One Durable Object per inbox: the events, their deliveries, the targets and their cursors. SQLite-backed, so an
+# inbox keeps everything it ever received.
+[[durable_objects.bindings]]
+name = "INBOX"
+class_name = "Inbox"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Inbox"]

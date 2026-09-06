@@ -1,0 +1,76 @@
+{
+  "id": "hookline",
+  "description": "Hookline's world: the Worker under wrangler dev, with twins of the vendors that send webhooks (Stripe, GitHub, Polar) and a twin app as the target. Nothing in the world calls a real API.",
+  "stripEnv": [
+    "HERMES_*"
+  ],
+  "services": [
+    {
+      "id": "stripe",
+      "type": "twin",
+      "command": "bun",
+      "args": [
+        "node_modules/@volter/twin-stripe/src/cli.ts",
+        "serve"
+      ],
+      "port": "auto",
+      "injectEnv": "STRIPE_TWIN_URL"
+    },
+    {
+      "id": "github",
+      "type": "twin",
+      "command": "bun",
+      "args": [
+        "node_modules/@volter/twin-github/src/cli.ts",
+        "serve"
+      ],
+      "port": "auto",
+      "injectEnv": "GITHUB_TWIN_URL"
+    },
+    {
+      "id": "polar",
+      "type": "twin",
+      "command": "bun",
+      "args": [
+        "node_modules/@volter/twin-polar/src/cli.ts",
+        "serve"
+      ],
+      "port": "auto",
+      "injectEnv": "POLAR_TWIN_URL"
+    },
+    {
+      "id": "target",
+      "type": "process",
+      "command": "bun",
+      "args": [
+        "world/target.ts"
+      ],
+      "port": "auto",
+      "portArg": false,
+      "rootArg": false,
+      "injectEnv": "TARGET_URL",
+      "ready": {
+        "httpUrl": "${url}/healthz",
+        "timeoutMs": 30000,
+        "intervalMs": 200
+      }
+    },
+    {
+      "id": "app",
+      "type": "process",
+      "command": "bun",
+      "args": [
+        "world/app.ts"
+      ],
+      "port": "auto",
+      "portArg": false,
+      "rootArg": "--persist-to",
+      "injectEnv": "HOOKLINE_URL",
+      "ready": {
+        "httpUrl": "${url}/healthz",
+        "timeoutMs": 120000,
+        "intervalMs": 500
+      }
+    }
+  ]
+}

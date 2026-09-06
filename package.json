@@ -1,0 +1,19 @@
+{
+  "name": "hookline",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bunx wrangler dev",
+    "check": "bunx tsc --noEmit"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260601.0",
+    "@volter/twin": "^0.1.2",
+    "@volter/twin-github": "^0.1.2",
+    "@volter/twin-polar": "^0.1.2",
+    "@volter/twin-stripe": "^0.1.2",
+    "@volter/twin-world": "^0.1.4",
+    "typescript": "^5.9.0",
+    "wrangler": "4.114.0"
+  }
+}

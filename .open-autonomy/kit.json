@@ -1,0 +1,9 @@
+{
+  "kit": "hermes",
+  "version": "2.3.8",
+  "params": {
+    "project": "hookline",
+    "account": "open-autonomy-org/hookline"
+  },
+  "divergences": []
+}
