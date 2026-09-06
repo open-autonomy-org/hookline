@@ -12,6 +12,9 @@ import { DurableObject } from 'cloudflare:workers';
 import { MAX_ATTEMPTS, nextDelayS, deliveryRequest, type Target } from './targets.ts';
 import type { Env } from './worker.ts';
 
+/** No attempt is scheduled at or before this: the queue's floor is "now" (an alarm at 0 is an error). */
+const MS_FLOOR = 1;
+
 export class Inbox extends DurableObject<Env> {
   private readonly sql: SqlStorage;
 
@@ -87,7 +90,17 @@ export class Inbox extends DurableObject<Env> {
       'INSERT INTO events (id, source, time, size, headers, body) VALUES (?, ?, ?, ?, ?, ?)',
       event.id, event.source, event.time, event.size, headers, body,
     );
+    this.enqueue(event.id);
+    await this.wake();
     return Response.json({ id: event.id });
+  }
+
+  /** Queue one event for every attached target; the queue is what the pump delivers from. */
+  private enqueue(eventId: string): void {
+    this.sql.exec(
+      'INSERT INTO deliveries (event_id, target, next_attempt_s, attempts, done) SELECT ?, name, 0, 0, 0 FROM targets ON CONFLICT (event_id, target) DO NOTHING',
+      eventId,
+    );
   }
 
   private list(): Response {
@@ -228,7 +241,7 @@ export class Inbox extends DurableObject<Env> {
       if ((await this.ctx.storage.getAlarm()) !== null) await this.ctx.storage.deleteAlarm();
       return;
     }
-    const nextMs = Math.max(nextS, 0);
+    const nextMs = nextS > MS_FLOOR ? nextS : MS_FLOOR;
     const current = await this.ctx.storage.getAlarm();
     if (current === null || current > nextMs) await this.ctx.storage.setAlarm(nextMs);
   }
