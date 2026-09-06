@@ -294,7 +294,10 @@ export class Inbox extends DurableObject<Env> {
     const pair = new WebSocketPair();
     this.ctx.acceptWebSocket(pair[1], [name]); // the server end: its messages arrive in webSocketMessage
     this.forgetTarget(name);
-    void this.deliverNextFrame(name);
+    // Sweep, don't just deliver: the laptop is here now, so what it holds — or whatever the
+    // queue's head is, however far the schedule pushed it back while the laptop was away — goes
+    // out as soon as the upgrade response has completed and the socket is deliverable.
+    void this.ctx.waitUntil(this.sweepSocket(name));
     return new Response(null, { status: 101, webSocket: pair[0] }); // the client end rides back to the laptop
   }
 
