@@ -34,6 +34,7 @@ import { DurableObject } from 'cloudflare:workers';
 import { nextDelayS, deliveryRequest, type Target } from './targets.ts';
 import { decodeSocketMessage, deliveryFrame } from './socket-targets.ts';
 import { verifyEvent, type Verdict } from './verify.ts';
+import { page, VERSION } from './ui.ts';
 import type { Env } from './worker.ts';
 
 /** No attempt is scheduled at or before this: the queue's floor is "now" (an alarm at 0 is an error). */
@@ -118,6 +119,12 @@ export class Inbox extends DurableObject<Env> {
   async fetch(req: Request): Promise<Response> {
     const url = new URL(req.url);
     try {
+      if (req.method === 'GET' && url.pathname === '/') {
+        return new Response(page(), { headers: { 'content-type': 'text/html; charset=utf-8' } });
+      }
+      if (req.method === 'GET' && url.pathname === '/api') {
+        return Response.json({ name: 'hookline', version: VERSION });
+      }
       if (req.method === 'POST' && url.pathname.startsWith('/in/')) {
         return await this.receive(this.sourceOf(url.pathname), req);
       }
