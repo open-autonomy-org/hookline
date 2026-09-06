@@ -9,6 +9,17 @@
   flight is the same delivery; asking again after one finished delivers again. Proven in the world: a replayed event
   reaches the target's `/received` again with `X-Hookline-Replay: true`, a range replays in arrival order, and the
   event's record shows the replay distinct from the original.
+- A laptop is a target: `bun src/cli.ts listen --inbox <inbox url> --to http://localhost:3000` connects out to the
+  inbox over a websocket as a named target (`PUT /targets/<name>` with `{"url": "hookline-socket:<name>"}` first),
+  the inbox delivers events down that socket in order from the target's cursor — one frame at a time, stop-and-wait —
+  the CLI posts each to the local URL exactly as a URL delivery would arrive (the same `X-Hookline-Original-*` and
+  `X-Hookline-Event` headers, the raw body byte for byte) and acknowledges it back; the cursor advances only on
+  acknowledgement. Anything else is a nack: recorded like any failed attempt and retried on the socket on the usual
+  schedule. Closing the CLI queues events; reopening delivers what was missed, in order, exactly once — no inbound
+  port on the laptop, no tunnel to keep alive. Replays ride the socket too, marked `X-Hookline-Replay: true`. Proven
+  in the world: the CLI attached to a local target, events driven from the twins, the target's `/received` complete
+  and in order across a disconnect, a nacked frame retried until the local target recovered, and a replay to the
+  laptop carrying the replay mark on the wire and on the event's record.
 - GitHub's and Polar's signatures are verified: an event delivered to `/in/github` is checked with GitHub's own scheme —
   the `X-Hub-Signature-256` header (`sha256=`, HMAC-SHA256 over the body keyed by `GITHUB_WEBHOOK_SECRET`) — and an event
   delivered to `/in/polar` with the Standard Webhooks scheme Polar signs (`webhook-id`/`webhook-timestamp`/
