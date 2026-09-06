@@ -98,7 +98,7 @@ export class Inbox extends DurableObject<Env> {
   /** Queue one event for every attached target; the queue is what the pump delivers from. */
   private enqueue(eventId: string): void {
     this.sql.exec(
-      'INSERT INTO deliveries (event_id, target, next_attempt_s, attempts, done) SELECT ?, name, 0, 0, 0 FROM targets ON CONFLICT (event_id, target) DO NOTHING',
+      'INSERT OR IGNORE INTO deliveries (event_id, target, next_attempt_s, attempts, done) SELECT ?, name, 0, 0, 0 FROM targets',
       eventId,
     );
   }
