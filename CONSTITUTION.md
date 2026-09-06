@@ -1,7 +1,9 @@
 # The constitution of Hookline
 
-What this project is and must remain. No task may violate an invariant, and no change may enter what is out of
-scope; the review holds every diff to this file.
+Hookline is a self-hosted inbox for webhooks: one stable address your vendors deliver to, every event kept with its
+exact bytes and verified, any of it replayable to any target — a deployed URL, or a laptop connected over a socket —
+from a Cloudflare Worker you deploy in a minute. This file is what it is and must remain: no task may violate an
+invariant, and no change may enter what is out of scope; the review holds every diff to it.
 
 ## What it is
 

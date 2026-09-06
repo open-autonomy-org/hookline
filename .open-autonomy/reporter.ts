@@ -25,6 +25,9 @@ const oa = new OpenAutonomy({ baseUrl, key: process.env.OPEN_AUTONOMY_KEY ?? 'va
 const stateFile = resolve(cfg.state_file);
 const IDLE_END_MS = Number(process.env.OPEN_AUTONOMY_IDLE_END_MS ?? 5 * 60_000);
 const TURN_END_MS = Number(process.env.OPEN_AUTONOMY_TURN_END_MS ?? 15_000);
+// The board's tasks with an attempt still running, as of its last read: a run session serving one of them is not over,
+// however long its transcript is silent.
+const runningItems = new Set<string>();
 const log = (m: string) => console.log(`reporter: ${m}`);
 // The valve holds the key; its health line says when the key expires. Logged once at start so a reader of
 // either log sees the expiry.
@@ -80,6 +83,22 @@ function jobName(id: string): string {
   return jobNames.get(id) ?? id;
 }
 const sourceOf = (d: SessionDescriptor): string => (d.recurrence?.job_id ? jobName(d.recurrence.job_id) : d.trigger === 'task' ? 'board' : d.surface?.platform ?? kindOf(d));
+// A provider id is safe to publish; an endpoint and credential are not. The kit's `custom` provider is the
+// platform only when its configured base URL names the valve. For any other configured provider, the owner's
+// provider account funds the session. An incomplete custom configuration stays unknown.
+function configuredProvider(home: string): string | undefined {
+  const config = readText(resolve(home, 'config.yaml')) ?? readText(resolve(cfg.hermes_home, 'config.yaml')) ?? '';
+  const provider = /^\s+provider:\s*["']?([^\s"']+)/m.exec(config)?.[1];
+  const endpoint = /^\s+base_url:\s*["']?([^\s"']+)/m.exec(config)?.[1];
+  if (!provider) return undefined;
+  if (endpoint === '${OPEN_AUTONOMY_BASE_URL}' || (endpoint && endpoint.replace(/\/$/, '') === baseUrl.replace(/\/$/, ''))) return 'open-autonomy';
+  if (provider === 'custom' && !endpoint) return undefined;
+  return provider;
+}
+function modelProviderOf(d: SessionDescriptor): string | undefined {
+  const home = d.profile && d.profile !== 'default' ? resolve(cfg.hermes_home, 'profiles', d.profile) : cfg.hermes_home;
+  return configuredProvider(home);
+}
 function publishes(d: SessionDescriptor): boolean {
   const id = d.locator.session_id;
   if (cfg.publish.private.includes(id) || (d.recurrence?.job_id && cfg.publish.private.includes(d.recurrence.job_id))) return false;
@@ -127,7 +146,7 @@ class Followed {
   constructor(readonly d: SessionDescriptor) {}
   get key(): string { return this.d.locator.session_id; }
   async open(): Promise<void> {
-    const start = { key: this.key, kind: kindOf(this.d), source: sourceOf(this.d), title: this.d.title ?? undefined, startedAt: this.d.updated_at_ms ? new Date(this.d.updated_at_ms).toISOString() : undefined };
+    const start = { key: this.key, kind: kindOf(this.d), source: sourceOf(this.d), title: this.d.title ?? undefined, modelProvider: modelProviderOf(this.d), startedAt: this.d.updated_at_ms ? new Date(this.d.updated_at_ms).toISOString() : undefined };
     this.session = await oa.resume(this.key, cfg.account, start);
     this.seq = this.session.seq;
     // Resuming at the platform's turn offset: the message index it corresponds to.
@@ -153,7 +172,9 @@ class Followed {
         const ready = msgs.slice(0, n);
         const turns = ready.flatMap(turnsOf);
         if (turns.length) {
-          this.item ??= itemIn(turns);
+          // Only a board run serves an item; a scheduled session (the PM over the whole board) mentions branches and
+          // tasks without being about one.
+          if (sourceOf(this.d) === 'board') this.item ??= itemIn(turns);
           this.sha ??= shaIn(turns);
           await this.session!.turns(turns, this.item);
           this.seq = this.session!.seq;
@@ -176,6 +197,9 @@ class Followed {
   }
   async end(why: string): Promise<void> {
     if (this.ended) return;
+    // Silence is not the end of a board run while the board still shows its attempt running: a world coming up or a
+    // long check is one tool call, minutes without a word. The board's own record says when the attempt is over.
+    if (why.startsWith('idle') && kindOf(this.d) === 'run' && this.item && runningItems.has(this.item)) { this.arm(); return; }
     this.ended = true;
     clearTimeout(this.timer);
     await this.sync(true);
@@ -266,6 +290,8 @@ async function board(): Promise<void> {
   const tasks = Object.values(read.workflow?.boards ?? {}).flatMap((b) => Object.values(b.tasks ?? {})).filter((t) => t.lane !== 'archived' && (t.assignee ?? 'default') === 'default').sort((a, b) => (a.created_at ?? '').localeCompare(b.created_at ?? '') || a.id.localeCompare(b.id));
   // A read that found no board at all (the database mid-write) is not an empty board.
   if (!tasks.length) return;
+  runningItems.clear();
+  for (const t of tasks) if (t.lane === 'running') runningItems.add(t.id);
   const items: RoadmapItem[] = tasks.map((t) => ({ id: t.id, title: t.title ?? t.id, status: statusOf(t.lane), acceptance: (t.body ?? '').split('\n').filter((l) => /^- /.test(l)).map((l) => l.slice(2).trim()) }));
   const digest = JSON.stringify(items);
   if (digest !== roadmapDigest) {
@@ -302,7 +328,7 @@ async function setup(): Promise<void> {
   const home = cfg.hermes_home;
   const config = readText(resolve(home, 'config.yaml')) ?? '';
   const model = /^\s+default:\s*(\S+)/m.exec(config)?.[1];
-  const provider = /^\s+provider:\s*(\S+)/m.exec(config)?.[1];
+  const provider = configuredProvider(home);
   let schedule: Array<{ name: string; schedule: string; description?: string }> = [];
   try { const seed = JSON.parse(readText(resolve(home, 'cron', 'jobs.seed.json')) ?? '{}') as { jobs?: Array<{ name?: string; schedule?: string; prompt?: string; script?: string }> }; schedule = (seed.jobs ?? []).filter((j) => j.name && j.schedule).map((j) => ({ name: j.name!, schedule: j.schedule!, description: j.prompt ?? (j.script ? `runs ${j.script}` : undefined) })); } catch { /* no seed */ }
   const skills: string[] = [];
