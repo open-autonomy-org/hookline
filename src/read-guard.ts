@@ -29,13 +29,58 @@ export function readGuardFailure(req: Request, env: ReadSecret): Response | unde
   }
   const presented = presentedToken(req, url);
   if (presented === null || !tokensEqual(presented, secret)) {
-    return new Response('this read needs the read token: present it as `Authorization: Bearer <HOOKLINE_READ_TOKEN>`\n', {
+    // A browser navigation is answered with the one line and the ask, so the page can ask for the
+    // token once; every other caller gets the one line alone. The form submits the token as
+    // `?token=`, which the guard accepts on a GET — after that the page keeps it in local storage.
+    if ((req.headers.get('accept') ?? '').includes('text/html')) {
+      return new Response(REFUSAL_HTML, { status: 401, headers: { 'content-type': 'text/html; charset=utf-8' } });
+    }
+    return new Response(REFUSAL_LINE, {
       status: 401,
       headers: { 'www-authenticate': 'Bearer realm="hookline"' },
     });
   }
   return undefined;
 }
+
+const REFUSAL_LINE = 'this read needs the read token: present it as `Authorization: Bearer <HOOKLINE_READ_TOKEN>`\n';
+
+/**
+ * The refusal a browser is shown: the one line, a form that asks for the token (submitted as
+ * `?token=`), and nothing else — no name, no version, nothing about the inbox's contents. A
+ * visitor whose browser already holds the token (the page keeps it in local storage) is taken
+ * straight in; one whose token was refused stays here to type the new one. The stored token is
+ * not re-tried when it is what was just refused — that would loop.
+ */
+const REFUSAL_HTML = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hookline</title>
+<style>body { font: 14px/1.5 ui-monospace, Menlo, Consolas, monospace; margin: 2rem auto; max-width: 40rem; padding: 0 1rem; }
+form { display: flex; gap: 0.5rem; align-items: baseline; } input { font: inherit; padding: 0.15rem 0.4rem; flex: 1 1 12rem; }</style>
+</head>
+<body>
+<p>this read needs the read token: present it as Authorization: Bearer &lt;your HOOKLINE_READ_TOKEN&gt;</p>
+<form method="get" action="">
+  <input name="token" type="password" autocomplete="off" autofocus placeholder="HOOKLINE_READ_TOKEN">
+  <button type="submit">read the inbox</button>
+</form>
+<script>
+(function () {
+  'use strict';
+  var stored = null;
+  try { stored = window.localStorage.getItem('hookline_read_token'); } catch (e) { /* no storage — the form asks */ }
+  var asked = new URLSearchParams(window.location.search).get('token');
+  if (stored !== null && stored !== '' && stored !== asked) {
+    window.location.replace(window.location.pathname + '?token=' + encodeURIComponent(stored));
+  }
+})();
+</script>
+</body>
+</html>
+`;
 
 /** The routes any caller may use without the token: the vendor doors and the name-and-version face. */
 function isOpenRoute(method: string, pathname: string): boolean {

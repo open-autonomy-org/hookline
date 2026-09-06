@@ -294,6 +294,15 @@ footer { opacity: 0.6; margin-top: 1rem; }
 
   $('#refresh').onclick = function () { load(); };
 
+  // A token that arrived in the URL (the guard's ask form submits it as ?token=) is kept once in
+  // local storage and stripped from the address bar; from here on every read presents it as
+  // 'Authorization: Bearer <token>' from storage.
+  var asked = new URLSearchParams(window.location.search).get('token');
+  if (asked !== null && asked !== '') {
+    rememberToken(asked);
+    window.history.replaceState({}, '', window.location.pathname);
+  }
+
   // A stored token goes straight to reading; without one the ask form is the first thing the
   // operator sees.
   function authed() {
