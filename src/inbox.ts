@@ -13,6 +13,12 @@
 // attempted until a 2xx acknowledges it or the retry policy is exhausted, every attempt recorded
 // (time, target, status, error). One target's run never waits on another's; the DO's single alarm
 // wakes whichever target has work due, and retries keep it driven while work remains.
+//
+// A replay is an explicit re-delivery, recorded as one: `POST /events/<id>/replay` (a target name
+// in the body) and `POST /targets/<name>/replay` (a `?from=<event id>` or `?since=<time>` range)
+// queue additional delivery rows flagged `replay`, which ride the same queue as the originals —
+// behind them in arrival order — with the same retries and recorded attempts, and reach the target
+// marked `X-Hookline-Replay: true`. The originals are replay 0; a replay is never one of them.
 import { DurableObject } from 'cloudflare:workers';
 import { nextDelayS, deliveryRequest, type Target } from './targets.ts';
 import { verifyEvent, type Verdict } from './verify.ts';
@@ -54,8 +60,30 @@ export class Inbox extends DurableObject<Env> {
       next_attempt_s INTEGER NOT NULL,
       attempts INTEGER NOT NULL DEFAULT 0,
       done INTEGER NOT NULL DEFAULT 0,
-      UNIQUE (event_id, target)
+      replay INTEGER NOT NULL DEFAULT 0,
+      UNIQUE (event_id, target, replay)
     )`);
+    // A table born before replays existed carries UNIQUE (event_id, target), which would silently
+    // swallow a replay row whose event and target already have an original delivery. It is rebuilt
+    // in place, once, with the replay column and the three-way key.
+    const deliveryColumns = new Set(this.sql.exec('PRAGMA table_info(deliveries)').toArray().map((row) => String(row.name)));
+    if (!deliveryColumns.has('replay')) {
+      this.sql.exec(`CREATE TABLE deliveries_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        event_id TEXT NOT NULL REFERENCES events(id),
+        target TEXT NOT NULL REFERENCES targets(name),
+        next_attempt_s INTEGER NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        done INTEGER NOT NULL DEFAULT 0,
+        replay INTEGER NOT NULL DEFAULT 0,
+        UNIQUE (event_id, target, replay)
+      )`);
+      this.sql.exec(`INSERT INTO deliveries_new (id, event_id, target, next_attempt_s, attempts, done, replay)
+        SELECT id, event_id, target, next_attempt_s, attempts, done, 0 FROM deliveries`);
+      this.sql.exec('DROP TABLE deliveries');
+      this.sql.exec('ALTER TABLE deliveries_new RENAME TO deliveries');
+      this.sql.exec('CREATE INDEX IF NOT EXISTS deliveries_by_next ON deliveries (next_attempt_s)');
+    }
     this.sql.exec(`CREATE TABLE IF NOT EXISTS attempts (
       seq INTEGER PRIMARY KEY AUTOINCREMENT,
       delivery_id INTEGER NOT NULL REFERENCES deliveries(id),
@@ -81,6 +109,26 @@ export class Inbox extends DurableObject<Env> {
         return this.attach(decodeSegment(url.pathname, '/targets/'.length), req);
       }
       if (req.method === 'GET' && url.pathname === '/targets') return Response.json(this.targets());
+      if (req.method === 'POST' && url.pathname.startsWith('/events/')) {
+        const rest = url.pathname.slice('/events/'.length);
+        const slash = rest.lastIndexOf('/');
+        if (slash !== -1 && rest.slice(slash + 1) === 'replay') {
+          return this.replayEvent(decodeSegment(rest.slice(0, slash)), req);
+        }
+        return this.show(decodeSegment(rest));
+      }
+      if (req.method === 'POST' && url.pathname.startsWith('/targets/')) {
+        const rest = url.pathname.slice('/targets/'.length);
+        const slash = rest.lastIndexOf('/');
+        if (slash !== -1 && rest.slice(slash + 1) === 'replay') {
+          const from = url.searchParams.get('from');
+          const since = url.searchParams.get('since');
+          if ((from === null) === (since === null)) {
+            throw new Error(`POST /targets/${decodeSegment(rest.slice(0, slash))}/replay wants exactly one range: ?from=<event id> or ?since=<ISO time>`);
+          }
+          return this.replayRange(decodeSegment(rest.slice(0, slash)), from, since);
+        }
+      }
       return new Response('not found\n', { status: 404 });
     } catch (cause) {
       return new Response(`${cause instanceof Error ? cause.message : String(cause)}\n`, { status: 400 });
@@ -157,7 +205,7 @@ export class Inbox extends DurableObject<Env> {
       headers: JSON.parse(row.headers as string) as Array<[string, string]>,
       body: toBase64(new Uint8Array(row.body as ArrayBuffer)),
       attempts: this.sql.exec(
-        `SELECT attempts.target, attempts.time, attempts.status, attempts.error
+        `SELECT attempts.target, attempts.time, attempts.status, attempts.error, deliveries.replay
          FROM attempts JOIN deliveries ON deliveries.id = attempts.delivery_id
          WHERE deliveries.event_id = ? ORDER BY attempts.seq`,
         id,
@@ -166,6 +214,7 @@ export class Inbox extends DurableObject<Env> {
         time: attempt.time as string,
         status: attempt.status === null ? null : attempt.status as number,
         error: attempt.error === null ? null : attempt.error as string,
+        replay: Number(attempt.replay) === 1,
       })),
     });
   }
@@ -200,6 +249,64 @@ export class Inbox extends DurableObject<Env> {
     }));
   }
 
+  /**
+   * Replay one event to one target: a target name in the body. The replay is an additional
+   * delivery row flagged `replay`, distinct from the original, riding the queue behind it.
+   */
+  private async replayEvent(id: string, req: Request): Promise<Response> {
+    if (req.headers.get('content-type') !== 'application/json') {
+      throw new Error(`POST /events/${id}/replay wants a JSON body ({"target": ...}), got content-type ${JSON.stringify(req.headers.get('content-type'))}`);
+    }
+    const body = (await req.json()) as { target?: unknown };
+    if (typeof body.target !== 'string' || body.target === '') {
+      throw new Error(`POST /events/${id}/replay: target must be the name of an attached target, got ${JSON.stringify(body.target)}`);
+    }
+    return this.replay([id], body.target);
+  }
+
+  /**
+   * Replay a range of events to one target, in order: `?from=<event id>` is that event and
+   * everything after it; `?since=<ISO time>` is everything stored at or after the time. Both
+   * resolve against arrival order (seq), so the replays reach the target in order.
+   */
+  private async replayRange(name: string, from: string | null, since: string | null): Promise<Response> {
+    if (since !== null) {
+      const when = Date.parse(since);
+      if (Number.isNaN(when)) throw new Error(`POST /targets/${name}/replay: since must be an ISO time, got ${JSON.stringify(since)}`);
+      const rows = this.sql.exec('SELECT id FROM events WHERE time >= ? ORDER BY seq', new Date(when).toISOString()).toArray();
+      return this.replay(rows.map((row) => String(row.id)), name);
+    }
+    const rows = this.sql.exec('SELECT seq FROM events WHERE id = ?', from).toArray();
+    if (rows.length === 0) throw new Error(`POST /targets/${name}/replay: no event ${JSON.stringify(from)} in the inbox`);
+    const seq = Number(rows[0].seq);
+    const rest = this.sql.exec('SELECT id FROM events WHERE seq >= ? ORDER BY seq', seq).toArray();
+    return this.replay(rest.map((row) => String(row.id)), name);
+  }
+
+  /**
+   * Queue the named events to the target as replays — additional delivery rows, one per event,
+   * distinct from the originals and recorded as what they are. The queue's own key keeps a
+   * duplicate request idempotent: a second request for the same range is answered with what is
+   * already pending rather than queuing it twice.
+   */
+  private async replay(ids: string[], name: string): Promise<Response> {
+    const target = this.targets().find((candidate) => candidate.name === name);
+    if (!target) {
+      throw new Error(`replay to ${JSON.stringify(name)}: no target with that name is attached (attach it with PUT /targets/${name})`);
+    }
+    let queued = 0;
+    for (const id of ids) {
+      const result = this.sql.exec(
+        `INSERT OR IGNORE INTO deliveries (event_id, target, next_attempt_s, attempts, done, replay)
+         SELECT ?, ?, 0, 0, 0, 1 WHERE EXISTS (SELECT 1 FROM events WHERE id = ?)`,
+        id, name, id,
+      );
+      queued += result.rowsWritten;
+    }
+    await this.wake();
+    return Response.json({ target: name, events: ids, queued });
+  }
+
   /** Run everything due for one target now; another target's run never waits on it. */
   private async run(targetName: string): Promise<void> {
     if (this.running.has(targetName)) return;
@@ -207,11 +314,11 @@ export class Inbox extends DurableObject<Env> {
     try {
       for (;;) {
         const due = this.sql.exec(
-          'SELECT id, event_id, attempts FROM deliveries WHERE target = ? AND done = 0 AND next_attempt_s >= 0 AND next_attempt_s <= ? ORDER BY next_attempt_s, id LIMIT 1',
+          'SELECT id, event_id, attempts, replay FROM deliveries WHERE target = ? AND done = 0 AND next_attempt_s >= 0 AND next_attempt_s <= ? ORDER BY next_attempt_s, id LIMIT 1',
           targetName, Date.now(),
         ).toArray()[0];
         if (!due) break;
-        await this.attempt(String(due.id), String(due.event_id), targetName, Number(due.attempts));
+        await this.attempt(String(due.id), String(due.event_id), targetName, Number(due.attempts), Number(due.replay) === 1);
       }
     } finally {
       this.running.delete(targetName);
@@ -219,7 +326,7 @@ export class Inbox extends DurableObject<Env> {
   }
 
   /** One delivery attempt against the target URL; records it either way and reschedules or finishes. */
-  private async attempt(deliveryId: string, eventId: string, targetName: string, attemptsMade: number): Promise<void> {
+  private async attempt(deliveryId: string, eventId: string, targetName: string, attemptsMade: number, replay: boolean): Promise<void> {
     const target = this.targets().find((candidate) => candidate.name === targetName);
     if (!target) throw new Error(`delivery ${deliveryId} names target ${JSON.stringify(targetName)} but no target with that name is attached`);
     const rows = this.sql.exec('SELECT headers, body FROM events WHERE id = ?', eventId).toArray();
@@ -231,7 +338,7 @@ export class Inbox extends DurableObject<Env> {
     let status: number | null = null;
     let error: string | null = null;
     try {
-      const response = await fetch(deliveryRequest(target, { id: eventId, headers }, body));
+      const response = await fetch(deliveryRequest(target, { id: eventId, headers, replay }, body));
       status = response.status;
       if (!(status >= 200 && status < 300)) error = `not acknowledged: status ${status}`;
       await response.body?.cancel();
@@ -286,7 +393,7 @@ export class Inbox extends DurableObject<Env> {
 }
 
 /** A single path segment after `skip` bytes, decoded. A malformed encoding fails loudly. */
-function decodeSegment(pathname: string, skip: number): string {
+function decodeSegment(pathname: string, skip = 0): string {
   const raw = pathname.slice(skip);
   try {
     return decodeURIComponent(raw);

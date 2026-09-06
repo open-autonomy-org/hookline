@@ -20,13 +20,15 @@ export function nextDelayS(attemptsMade: number): number | undefined {
 
 /**
  * The POST the inbox makes to a target: the raw body byte for byte, the original headers prefixed
- * `X-Hookline-Original-`, and `X-Hookline-Event` naming the event. Everything that would overwrite what the
- * delivery itself needs (host, content-length) is left to fetch.
+ * `X-Hookline-Original-`, and `X-Hookline-Event` naming the event. A replay — an explicit
+ * re-delivery, never one of the originals — also carries `X-Hookline-Replay: true`. Everything
+ * that would overwrite what the delivery itself needs (host, content-length) is left to fetch.
  */
-export function deliveryRequest(target: Target, event: { id: string; headers: Array<[string, string]> }, body: Uint8Array): Request {
+export function deliveryRequest(target: Target, event: { id: string; headers: Array<[string, string]>; replay?: boolean }, body: Uint8Array): Request {
   const headers = new Headers();
   for (const [name, value] of event.headers) headers.append(`X-Hookline-Original-${name}`, value);
   headers.set('X-Hookline-Event', event.id);
+  if (event.replay) headers.set('X-Hookline-Replay', 'true');
   return new Request(target.url, { method: 'POST', body: bytesView(body), headers });
 }
 
