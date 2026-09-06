@@ -4,33 +4,60 @@ A self-hosted inbox for webhooks: one stable address your vendors deliver to, ev
 verified, inspectable, replayable to any target — a deployed URL or a laptop connected over a socket, no tunnel to
 keep alive. A Cloudflare Worker you deploy in a minute.
 
-It is being built in the open by its agent, one acceptance line at a time, on a budget its patrons fund through
-Open Autonomy. Everything it does is public: its board, every session as it happens, every cent, on
-**[its project page](https://open-autonomy.org/p/open-autonomy-org%2Fhookline)**. Today the Worker receives and forwards: every
-webhook delivered to `POST /in/<source>` is stored in the inbox before anything else — an id, the source, the time,
-every header, the raw body byte for byte — and answered `200` with the id; `GET /events` lists them newest first and
-`GET /events/<id>` returns one whole, with every delivery attempt recorded on it. Every stored event is delivered to
-every attached target: `PUT /targets/<name>` with `{"url": ...}` attaches one (and delivers the backlog to it),
-`GET /targets` lists them. A delivery is the event as a `POST`: the raw body, the original headers under
-`X-Hookline-Original-`, and `X-Hookline-Event` naming the event. Any 2xx acknowledges it; anything else is retried —
-1s, 5s, 30s, 2m, 10m, then hourly for a day — and every attempt is recorded. Anything already delivered can be
-delivered again, explicitly and recorded as a replay: `POST /events/<id>/replay` with `{"target": <name>}` delivers
-that event to that target again, and `POST /targets/<name>/replay?from=<event id>` (that event and everything after
-it) or `?since=<ISO time>` (everything stored at or after the time) replays a range, in order. A replay carries
-`X-Hookline-Replay: true` on the wire, shows as `replay: true` on the event's recorded attempts, and queues behind
-the originals with the same retries. `CONSTITUTION.md` says where it is going,
-and the board says what is next. Every event's signature is verified with its vendor's own scheme against the secret
-in the Worker's bindings — `STRIPE_WEBHOOK_SECRET` for `/in/stripe`, Stripe's `Stripe-Signature` scheme (`t=`/`v1=`,
-HMAC-SHA256 over `t.body`, a 300s tolerance window); `GITHUB_WEBHOOK_SECRET` for `/in/github`, GitHub's
-`X-Hub-Signature-256` scheme (`sha256=` HMAC-SHA256 over the body); `POLAR_WEBHOOK_SECRET` for `/in/polar`, the
-Standard Webhooks scheme Polar signs with (`webhook-id`/`webhook-timestamp`/`webhook-signature` v1, HMAC-SHA256 over
-`id.timestamp.body`, base64, a 300s tolerance window) — and the verdict is recorded on the event: `verified: true|false`
-and `verified_why` saying exactly what was checked. Verification never blocks storage: an unverified event is kept and
-marked, never dropped. The secrets are Worker secrets — `wrangler secret put STRIPE_WEBHOOK_SECRET` (and the GitHub and
-Polar ones) in production, a `.dev.vars` file (git-ignored) under `wrangler dev`.
+## Deploy in a minute
 
-A laptop is a target too. Attach it (`PUT /targets/laptop` with `{"url": "hookline-socket:laptop"}`), then run the CLI
-on the laptop — one stable outbound websocket, no tunnel, no inbound port:
+From a fresh clone to your first event, four commands and a vendor. You need [Bun](https://bun.sh) and a Cloudflare
+account that has run `wrangler login` once.
+
+```bash
+git clone https://github.com/open-autonomy-org/hookline.git && cd hookline
+bun install
+bunx wrangler deploy --define HOOKLINE_VERSION:"\"$(git rev-parse --short HEAD)\""   # asks to create the Worker the first time
+bunx wrangler secret put STRIPE_WEBHOOK_SECRET                                       # paste the endpoint's signing secret
+```
+
+The Worker's own address prints at the end of the deploy (`https://hookline.<your-subdomain>.workers.dev`) — that
+address is the inbox. Open it in a browser: the page lists the events, each with its signature verdict, its
+deliveries per target and a replay button, and says what version it runs.
+
+Point a vendor at the inbox and the first event is on the page and at `GET /events` within seconds. For Stripe, the
+endpoint's signing secret is the one shown on the endpoint you create in Stripe's dashboard with
+`https://<inbox address>/in/stripe` as its URL; Stripe signs with `Stripe-Signature`, and the inbox verifies it
+against the secret you just set. GitHub takes `https://<inbox address>/in/github` (secret with `wrangler secret put
+GITHUB_WEBHOOK_SECRET`) and Polar `https://<inbox address>/in/polar` (`wrangler secret put POLAR_WEBHOOK_SECRET`) the
+same way — each vendor's signature is checked with its own scheme, the verdict recorded on the event. An event whose
+signature does not check is kept and marked, never dropped. No secret is ever shown in the UI or kept in the inbox's
+records.
+
+No vendor yet, or you want to see it move before wiring one: open the page and send itself an event with the
+"send an event" form (a source without a scheme is recorded `unverified` with the reason — verification never blocks
+storage), or from a shell:
+
+```bash
+curl -X POST https://<inbox address>/in/stripe -H 'content-type: application/json' -d '{"hello":"world"}'
+```
+
+Now attach a target and everything stored is delivered to it:
+
+```bash
+curl -X PUT https://<inbox address>/targets/app -H 'content-type: application/json' -d '{"url":"https://your.app/hooks"}'
+```
+
+A delivery is the event as a `POST`: the raw body, the original headers under `X-Hookline-Original-`, and
+`X-Hookline-Event` naming the event. Any 2xx acknowledges it; anything else is retried — 1s, 5s, 30s, 2m, 10m, then
+hourly for a day — and every attempt is recorded on the event. Anything already delivered can be delivered again,
+explicitly and recorded as a replay — `POST /events/<id>/replay` with `{"target": <name>}` for one event,
+`POST /targets/<name>/replay?from=<event id>` or `?since=<ISO time>` for a range, in order; a replay carries
+`X-Hookline-Replay: true` on the wire and shows as `replay: true` on the event's recorded attempts. The page's
+replay button calls the same route.
+
+`GET /events` lists the events newest first and `GET /events/<id>` returns one whole — every header, the body, and
+every delivery attempt recorded on it.
+
+## A laptop is a target too
+
+Attach it (`PUT /targets/laptop` with `{"url": "hookline-socket:laptop"}`), then run the CLI on the laptop — one
+stable outbound websocket, no tunnel, no inbound port:
 
 ```bash
 bun src/cli.ts listen --inbox ws://localhost:8787 --to http://localhost:3000
@@ -39,7 +66,22 @@ bun src/cli.ts listen --inbox ws://localhost:8787 --to http://localhost:3000
 The inbox delivers each event down the socket in order; the CLI posts it to the local URL exactly as a URL delivery
 would arrive and acknowledges it back — the inbox's cursor advances only on the ack, so a closed laptop queues events
 and a reopened one receives what it missed, in order, exactly once. `--target <name>` names the target (default
-`laptop`).
+`laptop`). Against a deployed inbox, the address is its `wss://` form (`wss://hookline.<your-subdomain>.workers.dev`).
+
+## Developing here
+
+The repository is worked in the open: `CONSTITUTION.md` says what Hookline is and must remain, the board says what is
+next, and `CONTRIBUTING.md` says how code is written here.
+
+```bash
+bun install
+bun run dev        # the Worker, locally, on http://localhost:8787 — same page, same API
+bun run check      # the typecheck, in seconds
+```
+
+Secrets under `wrangler dev` come from a `.dev.vars` file (git-ignored), one binding per line
+(`STRIPE_WEBHOOK_SECRET=whsec_…`, and the GitHub and Polar ones likewise). Under `wrangler deploy`, secrets are
+Worker secrets set with `wrangler secret put`.
 
 [![runway](https://open-autonomy.org/v1/accounts/open-autonomy-org%2Fhookline/runway.svg)](https://open-autonomy.org/p/open-autonomy-org%2Fhookline)
 [![now](https://open-autonomy.org/v1/accounts/open-autonomy-org%2Fhookline/now.svg)](https://open-autonomy.org/p/open-autonomy-org%2Fhookline)
@@ -48,11 +90,5 @@ and a reopened one receives what it missed, in order, exactly once. `--target <n
 
 Questions, ideas and bugs go in this repository's issues; the agent's owner files what fits the constitution on the
 board, and the board is worked in order.
-
-```bash
-bun install
-bun run dev        # the Worker, locally
-bun run check      # the typecheck, in seconds
-```
 
 `world/README.md` is how it is verified: against twins of Stripe, GitHub and Polar, never a real account.
