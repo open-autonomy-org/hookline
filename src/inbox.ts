@@ -4,12 +4,18 @@
 // An event is never modified or deleted by this software; it is kept forever in arrival order and
 // listed newest first (CONSTITUTION.md).
 //
+// Before it is stored, an event is verified with its vendor's scheme (src/verify.ts) against the
+// secrets in the Worker's bindings, and the verdict is recorded with it: `verified` and why. The
+// verdict never gates anything — an unverified event is kept, listed and delivered like any other,
+// only marked.
+//
 // Every stored event is delivered to every attached target: one delivery row per (event, target),
 // attempted until a 2xx acknowledges it or the retry policy is exhausted, every attempt recorded
 // (time, target, status, error). One target's run never waits on another's; the DO's single alarm
 // wakes whichever target has work due, and retries keep it driven while work remains.
 import { DurableObject } from 'cloudflare:workers';
 import { nextDelayS, deliveryRequest, type Target } from './targets.ts';
+import { verifyEvent, type Verdict } from './verify.ts';
 import type { Env } from './worker.ts';
 
 /** No attempt is scheduled at or before this: the queue's floor is "now" (an alarm at 0 is an error). */
@@ -30,6 +36,8 @@ export class Inbox extends DurableObject<Env> {
       headers TEXT NOT NULL,
       body BLOB NOT NULL
     )`);
+    this.sql.exec('ALTER TABLE events ADD COLUMN verified INTEGER NOT NULL DEFAULT 0');
+    this.sql.exec('ALTER TABLE events ADD COLUMN verified_why TEXT NOT NULL DEFAULT \'\'');
     this.sql.exec(`CREATE TABLE IF NOT EXISTS targets (
       name TEXT PRIMARY KEY,
       url TEXT NOT NULL
@@ -81,18 +89,28 @@ export class Inbox extends DurableObject<Env> {
     return source;
   }
 
-  /** Store the event before anything else: id, source, time, every header, the body byte for byte. */
+  /**
+   * Store the event before anything else: id, source, time, every header, the body byte for byte.
+   * The signature verdict rides along: verified with the vendor's own scheme against the bindings'
+   * secret, recorded as `verified` and why — and never allowed to block storage.
+   */
   private async receive(source: string, req: Request): Promise<Response> {
     const body = await req.arrayBuffer();
     const headers = JSON.stringify([...req.headers]);
     const event = { id: `ev_${crypto.randomUUID()}`, source, time: new Date().toISOString(), size: body.byteLength };
+    let verdict: Verdict;
+    try {
+      verdict = await verifyEvent(source, req.headers, body, this.env);
+    } catch (cause) {
+      verdict = { verified: false, why: `verification failed to run: ${cause instanceof Error ? cause.message : String(cause)}` };
+    }
     this.sql.exec(
-      'INSERT INTO events (id, source, time, size, headers, body) VALUES (?, ?, ?, ?, ?, ?)',
-      event.id, event.source, event.time, event.size, headers, body,
+      'INSERT INTO events (id, source, time, size, headers, body, verified, verified_why) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      event.id, event.source, event.time, event.size, headers, body, verdict.verified ? 1 : 0, verdict.why,
     );
     this.enqueueAll();
     await this.wake();
-    return Response.json({ id: event.id });
+    return Response.json({ id: event.id, verified: verdict.verified, verified_why: verdict.why });
   }
 
   /**
@@ -108,18 +126,19 @@ export class Inbox extends DurableObject<Env> {
   }
 
   private list(): Response {
-    const rows = this.sql.exec('SELECT id, source, time, size FROM events ORDER BY seq DESC').toArray();
+    const rows = this.sql.exec('SELECT id, source, time, size, verified FROM events ORDER BY seq DESC').toArray();
     return Response.json(rows.map((row) => ({
       id: row.id as string,
       source: row.source as string,
       time: row.time as string,
       size: row.size as number,
+      verified: row.verified === 1,
     })));
   }
 
   private show(id: string): Response {
     const rows = this.sql.exec(
-      `SELECT id, source, time, size, headers, body FROM events WHERE id = ?`, id,
+      `SELECT id, source, time, size, headers, body, verified, verified_why FROM events WHERE id = ?`, id,
     ).toArray();
     const row = rows[0];
     if (!row) return new Response(`no event ${id}\n`, { status: 404 });
@@ -128,6 +147,8 @@ export class Inbox extends DurableObject<Env> {
       source: row.source as string,
       time: row.time as string,
       size: row.size as number,
+      verified: row.verified === 1,
+      verified_why: row.verified_why as string,
       headers: JSON.parse(row.headers as string) as Array<[string, string]>,
       body: toBase64(new Uint8Array(row.body as ArrayBuffer)),
       attempts: this.sql.exec(
