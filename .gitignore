@@ -1,6 +1,7 @@
 node_modules/
 *.log
 .env
+.dev.vars
 
 # The agent's home (hermes/): its identity, skills and schedule are committed; its runtime state is not.
 hermes/.env

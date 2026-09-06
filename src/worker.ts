@@ -3,7 +3,11 @@
 // its own routes are only the health check.
 import { Inbox } from './inbox.ts';
 
-export interface Env { INBOX: DurableObjectNamespace<Inbox> }
+export interface Env {
+  INBOX: DurableObjectNamespace<Inbox>;
+  /** The vendor signing secrets verification verifies against — set as secrets (`wrangler secret put`, `.dev.vars` in dev). */
+  STRIPE_WEBHOOK_SECRET?: string;
+}
 
 export { Inbox } from './inbox.ts';
 
