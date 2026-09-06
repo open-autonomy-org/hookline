@@ -9,6 +9,8 @@ export interface Env {
   STRIPE_WEBHOOK_SECRET?: string;
   GITHUB_WEBHOOK_SECRET?: string;
   POLAR_WEBHOOK_SECRET?: string;
+  /** The read token every guarded route wants (`Authorization: Bearer …`) — set as a secret like the rest (src/read-guard.ts). */
+  HOOKLINE_READ_TOKEN?: string;
 }
 
 export { Inbox } from './inbox.ts';

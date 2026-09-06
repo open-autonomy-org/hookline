@@ -10,24 +10,28 @@
 // socket on its usual schedule. The socket dropping loses nothing: unacknowledged work stays the
 // inbox's pending frame and is re-sent when the laptop reattaches — the same delivery and cursor —
 // so a closed laptop queues events and a reopened one receives what it missed, in order, exactly
-// once. The wire protocol lives in src/socket-targets.ts; this file is the laptop's half of it.
+// once. The socket handshake is a guarded read like every other read: the token goes on it as
+// `?token=` (the laptop presents its own secret; the inbox's is never on the laptop). The wire
+// protocol lives in src/socket-targets.ts; this file is the laptop's half of it.
 const RECONNECT_MS = 1000;
 
 interface Args {
   inbox: string;
   to: string;
   target: string;
+  token: string;
 }
 
-/** Parse `listen --inbox <url> --to <url> [--target <name>]`. Anything else fails loudly. */
+/** Parse `listen --inbox <url> --to <url> [--target <name>] --token <read token>`. Anything else fails loudly. */
 export function parseArgs(argv: string[]): Args {
   const [command, ...rest] = argv;
   if (command !== 'listen') {
-    throw new Error(`usage: bun src/cli.ts listen --inbox <inbox url> --to <local url> [--target <name>] (got ${JSON.stringify(argv.join(' '))})`);
+    throw new Error(`usage: bun src/cli.ts listen --inbox <inbox url> --to <local url> [--target <name>] --token <read token> (got ${JSON.stringify(argv.join(' '))})`);
   }
   let inbox: string | undefined;
   let to: string | undefined;
   let target: string | undefined;
+  let token: string | undefined;
   for (let at = 0; at < rest.length; at += 2) {
     const flag = rest[at];
     const value = rest[at + 1];
@@ -35,7 +39,8 @@ export function parseArgs(argv: string[]): Args {
     if (flag === '--inbox') inbox = value;
     else if (flag === '--to') to = value;
     else if (flag === '--target') target = value;
-    else throw new Error(`unknown flag ${JSON.stringify(flag)}: listen takes --inbox, --to and --target`);
+    else if (flag === '--token') token = value;
+    else throw new Error(`unknown flag ${JSON.stringify(flag)}: listen takes --inbox, --to, --target and --token`);
   }
   if (inbox === undefined || !/^wss?:\/\//.test(inbox)) {
     throw new Error(`listen wants --inbox <inbox url>, a ws:// or wss:// URL (got ${JSON.stringify(inbox)})`);
@@ -43,7 +48,10 @@ export function parseArgs(argv: string[]): Args {
   if (to === undefined || !/^https?:\/\//.test(to)) {
     throw new Error(`listen wants --to <local url>, an http:// or https:// URL (got ${JSON.stringify(to)})`);
   }
-  return { inbox, to, target: target ?? 'laptop' };
+  if (token === undefined || token === '') {
+    throw new Error('listen wants --token <read token> (or HOOKLINE_READ_TOKEN in its environment): the inbox refuses every read without it');
+  }
+  return { inbox, to, target: target ?? 'laptop', token };
 }
 
 /** Attach to the inbox as a named socket target and deliver its frames to the local URL, forever. */
@@ -58,7 +66,7 @@ function listen(args: Args): void {
 
   const attach = (): void => {
     reconnect = undefined; // the timer that fired this attach has served its purpose
-    const ws = new WebSocket(`${args.inbox}/targets/${encodeURIComponent(args.target)}/socket`);
+    const ws = new WebSocket(`${args.inbox}/targets/${encodeURIComponent(args.target)}/socket?token=${encodeURIComponent(args.token)}`);
     socket = ws;
     ws.onopen = () => {
       if (reconnect !== undefined) clearTimeout(reconnect);
@@ -157,12 +165,15 @@ function listen(args: Args): void {
 const [command] = process.argv.slice(2);
 if (command === 'listen') {
   try {
-    listen(parseArgs(process.argv.slice(2)));
+    const envToken = process.env.HOOKLINE_READ_TOKEN;
+    const argv = process.argv.slice(2);
+    if (!argv.includes('--token') && typeof envToken === 'string' && envToken !== '') argv.push('--token', envToken);
+    listen(parseArgs(argv));
   } catch (cause) {
     console.error(`hookline listen: ${cause instanceof Error ? cause.message : String(cause)}`);
     process.exit(2);
   }
 } else {
-  console.error(`usage: bun src/cli.ts listen --inbox <inbox url> --to <local url> [--target <name>]`);
+  console.error(`usage: bun src/cli.ts listen --inbox <inbox url> --to <local url> [--target <name>] [--token <read token>]`);
   process.exit(2);
 }

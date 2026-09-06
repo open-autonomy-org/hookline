@@ -6,6 +6,13 @@
 // button per target that POSTs /events/<id>/replay like any other caller. The version the Worker
 // runs sits in the page's header line and at GET /api.
 //
+// Every one of those reads is the owner's to read, guarded by the inbox's read token: the page
+// asks for the token once, keeps it in the browser's local storage under `hookline_read_token`,
+// and presents it as 'Authorization: Bearer <token>' on every fetch it makes — the vendor doors
+// (POST /in/<source>, GET /api) need none. A refusal is taken as "the token is missing or wrong":
+// the ask form comes back, never a half-loaded page. The token lives in the browser and is
+// compared only against what the inbox answers; it is never shown back on the page.
+//
 // The version is baked in at deploy time by the README's deploy line,
 // `wrangler deploy --define HOOKLINE_VERSION:"\"<rev>\""`; a bundle built without it —
 // `wrangler dev`, the typecheck — runs as "hookline dev (unversioned)".
@@ -34,7 +41,10 @@ h1 { font-size: 1.25rem; margin: 0; }
 #tagline { opacity: 0.6; margin: 0.25rem 0 0; }
 #version { opacity: 0.6; margin: 0.75rem 0 0; }
 #status { margin: 0.75rem 0; min-height: 1.3em; white-space: pre-wrap; }
+#status.error { color: #c0392b; }
 form { margin: 0.25rem 0; display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: baseline; }
+#tokenform { margin: 0.75rem 0; }
+#tokenform input { flex: 1 1 16rem; }
 input { font: inherit; padding: 0.15rem 0.4rem; }
 table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
 th, td { text-align: left; padding: 0.3rem 0.75rem 0.3rem 0; vertical-align: top; border-bottom: 1px solid color-mix(in srgb, currentColor 20%, transparent); }
@@ -50,6 +60,11 @@ footer { opacity: 0.6; margin-top: 1rem; }
 <h1>Hookline</h1>
 <p id="tagline">a self-hosted inbox for webhooks: one stable address, every event kept byte for byte, verified, replayable to any target.</p>
 <div id="version">${VERSION}</div>
+<form id="tokenform" hidden>
+  <span>this inbox is read with a token:</span>
+  <input name="read-token" type="password" autocomplete="off" required placeholder="HOOKLINE_READ_TOKEN" title="the inbox's read token, set with wrangler secret put HOOKLINE_READ_TOKEN">
+  <button type="submit">read the inbox</button>
+</form>
 <div id="status"></div>
 <form id="receive">
   <span>send an event:</span>
@@ -73,13 +88,36 @@ footer { opacity: 0.6; margin-top: 1rem; }
 (function () {
   'use strict';
   var $ = function (sel) { return document.querySelector(sel); };
+  var TOKEN_KEY = 'hookline_read_token';
+
+  function readToken() {
+    try { return window.localStorage.getItem(TOKEN_KEY); } catch (e) { return null; }
+  }
+  function rememberToken(token) {
+    try { window.localStorage.setItem(TOKEN_KEY, token); } catch (e) { /* storage refused — the page just asks again next visit */ }
+  }
+  function forgetToken() {
+    try { window.localStorage.removeItem(TOKEN_KEY); } catch (e) { /* nothing to forget, as far as the page knows */ }
+  }
+
+  // Every guarded read carries the token as 'Authorization: Bearer <token>'; the vendor doors —
+  // POST /in/<source>, GET /api — need none and are fetched plainly.
+  function tokenFetch(url, options) {
+    var headers = new Headers((options || {}).headers || {});
+    headers.set('authorization', 'Bearer ' + readToken());
+    return fetch(url, Object.assign({}, options, { headers: headers }));
+  }
   function jget(url) {
-    return fetch(url).then(function (r) {
+    return tokenFetch(url).then(function (r) {
       if (!r.ok) throw new Error(url + ' answered ' + r.status);
       return r.json();
     });
   }
-  function status(message) { $('#status').textContent = message; }
+  function status(message, isError) {
+    var el = $('#status');
+    el.textContent = message;
+    el.className = isError ? 'error' : '';
+  }
   function refreshSoon() { setTimeout(load, 400); setTimeout(load, 2500); }
 
   function attemptLine(a) {
@@ -157,17 +195,18 @@ footer { opacity: 0.6; margin-top: 1rem; }
 
   function replay(id, target) {
     status('replaying ' + id + ' → ' + target + ' …');
-    fetch('/events/' + encodeURIComponent(id) + '/replay', {
+    tokenFetch('/events/' + encodeURIComponent(id) + '/replay', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ target: target }),
     })
       .then(function (r) {
         return r.text().then(function (text) {
-          status((r.ok ? 'replay queued: ' : 'replay failed: ' + r.status + ' ') + text.trim());
+          if (r.status === 401) { askForToken('the inbox refused that token — read it again: ' + text.trim()); return; }
+          status((r.ok ? 'replay queued: ' : 'replay failed: ' + r.status + ' ') + text.trim(), !r.ok);
           if (r.ok) refreshSoon();
         });
-      }, function (cause) { status('replay failed: ' + cause); });
+      }, function (cause) { status('replay failed: ' + cause, true); });
   }
 
   function load() {
@@ -204,8 +243,36 @@ footer { opacity: 0.6; margin-top: 1rem; }
             }
           });
       })
-      .catch(function (cause) { status('could not load: ' + cause); });
+      .catch(function (cause) { maybeTokenRefused(cause); });
   }
+
+  // A refusal anywhere in a load is taken as "the token is missing or wrong": the ask form comes
+  // back and the stored token is dropped. Anything else is reported as it always was.
+  function maybeTokenRefused(cause) {
+    var refused = String(cause).indexOf(' 401') !== -1 || String(cause).indexOf(' 503') !== -1;
+    if (refused) askForToken('the inbox refused to read: ' + cause);
+    else status('could not load: ' + cause, true);
+  }
+
+  function askForToken(message) {
+    forgetToken();
+    $('#tokenform').hidden = false;
+    $('#events').textContent = '';
+    $('#version').textContent = ${JSON.stringify(VERSION)};
+    status(message, true);
+    $('input[name="read-token"]').focus();
+  }
+
+  $('#tokenform').onsubmit = function (ev) {
+    ev.preventDefault();
+    var token = ev.target.elements['read-token'].value;
+    if (token === '') return;
+    rememberToken(token);
+    ev.target.elements['read-token'].value = '';
+    $('#tokenform').hidden = true;
+    status('reading…');
+    load();
+  };
 
   $('#receive').onsubmit = function (ev) {
     ev.preventDefault();
@@ -214,10 +281,10 @@ footer { opacity: 0.6; margin-top: 1rem; }
     fetch('/in/' + encodeURIComponent(source), { method: 'POST', headers: { 'content-type': 'application/json' }, body: body })
       .then(function (r) {
         return r.text().then(function (text) {
-          status('POST /in/' + source + ' → ' + r.status + ' ' + text.trim());
+          status('POST /in/' + source + ' → ' + r.status + ' ' + text.trim(), !r.ok);
           if (r.ok) refreshSoon();
         });
-      }, function (cause) { status('POST /in/ failed: ' + cause); });
+      }, function (cause) { status('POST /in/ failed: ' + cause, true); });
   };
 
   $('#replay').onsubmit = function (ev) {
@@ -227,7 +294,14 @@ footer { opacity: 0.6; margin-top: 1rem; }
 
   $('#refresh').onclick = function () { load(); };
 
-  load();
+  // A stored token goes straight to reading; without one the ask form is the first thing the
+  // operator sees.
+  function authed() {
+    if (readToken() === null || readToken() === '') askForToken('this inbox is read with a token — set with wrangler secret put HOOKLINE_READ_TOKEN');
+    else load();
+  }
+
+  authed();
 })();
 </script>
 </body>
