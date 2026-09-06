@@ -298,6 +298,16 @@ export class Inbox extends DurableObject<Env> {
     return new Response(null, { status: 101, webSocket: pair[0] }); // the client end rides back to the laptop
   }
 
+  /** The target a socket was accepted for, by its tag; empty when the socket is nobody's. */
+  private targetOf(ws: WebSocket): string {
+    return this.ctx.getTags(ws).find((tag) => tag !== '') ?? '';
+  }
+
+  /** The socket closed: the runtime prunes it from getWebSockets; a frame it held stays pending. */
+  override async webSocketClose(ws: WebSocket): Promise<void> {
+    void ws;
+  }
+
   /**
    * The socket a target holds, by its accept tag — looked up from the runtime, not from this
    * instance's memory: the DO hibernates and evicts, but its accepted sockets survive it, and
@@ -310,7 +320,9 @@ export class Inbox extends DurableObject<Env> {
   }
 
   /** One message from a laptop on its socket: the answer to the frame it holds. */
-  private async socketReceive(name: string, ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+  override async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+    const name = this.targetOf(ws);
+    if (name === '') return;
     if (typeof message !== 'string') {
       ws.close(1003, 'the protocol is text frames');
       return;
