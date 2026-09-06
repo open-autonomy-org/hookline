@@ -57,6 +57,7 @@ function listen(args: Args): void {
   let reconnect: ReturnType<typeof setTimeout> | undefined;
 
   const attach = (): void => {
+    reconnect = undefined; // the timer that fired this attach has served its purpose
     const ws = new WebSocket(`${args.inbox}/targets/${encodeURIComponent(args.target)}/socket`);
     socket = ws;
     ws.onopen = () => {
@@ -72,7 +73,8 @@ function listen(args: Args): void {
       void deliverFrame(message.data);
     };
     ws.onclose = () => {
-      if (socket === ws) socket = undefined;
+      if (socket !== ws) return; // a replaced connection's last gasp — the current one drives
+      socket = undefined;
       pending = undefined;
       console.error(`hookline listen: the socket closed; reconnecting in ${RECONNECT_MS}ms`);
       if (reconnect === undefined) reconnect = setTimeout(attach, RECONNECT_MS);

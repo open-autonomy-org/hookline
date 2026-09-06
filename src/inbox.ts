@@ -129,9 +129,10 @@ export class Inbox extends DurableObject<Env> {
         return await this.attach(decodeSegment(url.pathname, '/targets/'.length), req);
       }
       if (req.method === 'GET' && url.pathname === '/targets') return Response.json(this.targets());
-      if (req.method === 'GET' && url.pathname.startsWith('/targets/') && url.pathname.endsWith('/socket') && url.searchParams.get('upgrade') === 'websocket') {
-        // The laptop's websocket handshake is a GET with `Upgrade: websocket` (it is also sent as
-        // a query parameter, since not every client can set the header on the way out).
+      if (req.method === 'GET' && url.pathname.startsWith('/targets/') && url.pathname.endsWith('/socket')
+        && (req.headers.get('upgrade') === 'websocket' || url.searchParams.get('upgrade') === 'websocket')) {
+        // The laptop's websocket handshake is a GET with an `Upgrade: websocket` header (also
+        // accepted as a query parameter, for a client that cannot set the header on the way out).
         return this.socketUpgrade(decodeSegment(url.pathname.slice('/targets/'.length, url.pathname.length - '/socket'.length)), req);
       }
       if (req.method === 'POST' && url.pathname.startsWith('/events/')) {
