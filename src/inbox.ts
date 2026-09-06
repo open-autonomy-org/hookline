@@ -30,10 +30,18 @@
 // deadline passes; a laptop that is away simply holds the frame — nothing is lost — and a
 // reattaching one is handed what it missed, in order, exactly once. Every attempt — frame sent,
 // ack, nack — is recorded on the event.
+//
+// Reading is the owner's, not the public's: every route that reads or replays — the page, the
+// event list and its single events, the target list and target attachment, every replay route,
+// and the socket handshake — is guarded by the read token (src/read-guard.ts). A vendor's
+// `POST /in/<source>` and `GET /api` stay open; a vendor cannot send a token, and its signature
+// is its authentication. With the secret unset every read is refused 503 — the inbox never
+// falls open.
 import { DurableObject } from 'cloudflare:workers';
 import { nextDelayS, deliveryRequest, type Target } from './targets.ts';
 import { decodeSocketMessage, deliveryFrame } from './socket-targets.ts';
 import { verifyEvent, type Verdict } from './verify.ts';
+import { readGuardFailure } from './read-guard.ts';
 import { page, VERSION } from './ui.ts';
 import type { Env } from './worker.ts';
 
@@ -117,6 +125,8 @@ export class Inbox extends DurableObject<Env> {
   }
 
   async fetch(req: Request): Promise<Response> {
+    const refused = readGuardFailure(req, this.env);
+    if (refused !== undefined) return refused;
     const url = new URL(req.url);
     try {
       if (req.method === 'GET' && url.pathname === '/') {

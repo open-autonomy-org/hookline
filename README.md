@@ -6,15 +6,23 @@ keep alive. A Cloudflare Worker you deploy in a minute.
 
 ## Deploy in a minute
 
-From a fresh clone to your first event, four commands and a vendor. You need [Bun](https://bun.sh) and a Cloudflare
+From a fresh clone to your first event, five commands and a vendor. You need [Bun](https://bun.sh) and a Cloudflare
 account that has run `wrangler login` once.
 
 ```bash
 git clone https://github.com/open-autonomy-org/hookline.git && cd hookline
 bun install
 bunx wrangler deploy --define HOOKLINE_VERSION:"\"$(git rev-parse --short HEAD)\""   # asks to create the Worker the first time
+bunx wrangler secret put HOOKLINE_READ_TOKEN                                         # pick a long random string; this is yours, keep it
 bunx wrangler secret put STRIPE_WEBHOOK_SECRET                                       # paste the endpoint's signing secret
 ```
+
+The read token goes in before the first event because every read of the inbox — the page, `GET /events`, the replays,
+the socket a `hookline listen` target connects with — is the owner's to read, and the inbox never falls open: until
+the token is set it refuses every read with 503 rather than serve without one. A vendor's door stays open —
+`POST /in/<source>` needs no token (a vendor cannot send one; the signature on its payload is its authentication),
+and `GET /api` answers to anyone. The page asks you for the token once and keeps it in the browser's local storage;
+`hookline listen` takes it as `--token` (or `HOOKLINE_READ_TOKEN` in its environment).
 
 The Worker's own address prints at the end of the deploy (`https://hookline.<your-subdomain>.workers.dev`) — that
 address is the inbox. Open it in a browser: the page lists the events, each with its signature verdict, its
@@ -68,13 +76,15 @@ Attach it (`PUT /targets/laptop` with `{"url": "hookline-socket:laptop"}`), then
 stable outbound websocket, no tunnel, no inbound port:
 
 ```bash
-bun src/cli.ts listen --inbox ws://localhost:8787 --to http://localhost:3000
+bun src/cli.ts listen --inbox ws://localhost:8787 --to http://localhost:3000 --token <read token>
 ```
 
 The inbox delivers each event down the socket in order; the CLI posts it to the local URL exactly as a URL delivery
 would arrive and acknowledges it back — the inbox's cursor advances only on the ack, so a closed laptop queues events
 and a reopened one receives what it missed, in order, exactly once. `--target <name>` names the target (default
 `laptop`). Against a deployed inbox, the address is its `wss://` form (`wss://hookline.<your-subdomain>.workers.dev`).
+The socket is one of the inbox's guarded reads: `--token` carries the read token (or leave it off and set
+`HOOKLINE_READ_TOKEN` in the CLI's environment) — without it the inbox refuses the attach.
 
 ## Developing here
 
@@ -88,8 +98,8 @@ bun run check      # the typecheck, in seconds
 ```
 
 Secrets under `wrangler dev` come from a `.dev.vars` file (git-ignored), one binding per line
-(`STRIPE_WEBHOOK_SECRET=whsec_…`, and the GitHub and Polar ones likewise). Under `wrangler deploy`, secrets are
-Worker secrets set with `wrangler secret put`.
+(`HOOKLINE_READ_TOKEN=…`, `STRIPE_WEBHOOK_SECRET=whsec_…`, and the GitHub and Polar ones likewise). Under
+`wrangler deploy`, secrets are Worker secrets set with `wrangler secret put`.
 
 [![runway](https://open-autonomy.org/v1/accounts/open-autonomy-org%2Fhookline/runway.svg)](https://open-autonomy.org/p/open-autonomy-org%2Fhookline)
 [![now](https://open-autonomy.org/v1/accounts/open-autonomy-org%2Fhookline/now.svg)](https://open-autonomy.org/p/open-autonomy-org%2Fhookline)

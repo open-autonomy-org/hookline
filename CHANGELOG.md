@@ -1,6 +1,17 @@
 # Changelog
 
 ## Unreleased
+- The inbox is the owner's to read: a secret `HOOKLINE_READ_TOKEN` guards everything that reads or replays —
+  `GET /` (the page), `GET /events`, `GET /events/<id>`, `GET /targets`, `PUT /targets/<name>`, every `/replay`
+  route, and the websocket a `hookline listen` target connects with, presented as `Authorization: Bearer <token>`
+  (`?token=` on the socket handshake). A guarded request without it is refused 401 with one line and nothing about
+  the inbox's contents; the vendor doors stay open (`POST /in/<source>` needs no token — a vendor cannot send one —
+  and `GET /api` answers `{name, version}` to anyone), and `GET /healthz` answers the world's readiness probe. The
+  page asks for the token once and keeps it in the browser's local storage; `hookline listen` takes it as `--token`
+  (or `HOOKLINE_READ_TOKEN` in its environment) and puts it on the socket handshake. With the secret unset the
+  inbox refuses every read with 503, saying the secret is missing — it never falls open. Proven in the world: a
+  read without the token is 401, with it 200; a vendor's POST without any token is stored and verified; the page
+  with the token shows the events; `hookline listen` with the token receives, without it is refused.
 - Deploy in a minute: the README walks from a fresh clone to `bunx wrangler deploy` (with
   `--define HOOKLINE_VERSION:"\"$(git rev-parse --short HEAD)\""` so the Worker says what version it runs), a vendor
   pointed at the inbox's address, the secrets set through `wrangler secret put`, and the first event on `/events` —
