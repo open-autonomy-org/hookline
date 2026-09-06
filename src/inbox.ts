@@ -214,7 +214,7 @@ export class Inbox extends DurableObject<Env> {
         time: attempt.time as string,
         status: attempt.status === null ? null : attempt.status as number,
         error: attempt.error === null ? null : attempt.error as string,
-        replay: Number(attempt.replay) === 1,
+        replay: Number(attempt.replay) > 0,
       })),
     });
   }
