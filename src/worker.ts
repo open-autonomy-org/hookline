@@ -1,15 +1,11 @@
-// Hookline: a self-hosted inbox for webhooks, as a Cloudflare Worker. The board builds it one acceptance line at a
-// time (hermes/kanban.seed.json); this is the shape it starts from: the Worker answers its health check, and the inbox
-// is a Durable Object that keeps nothing yet.
-import { DurableObject } from 'cloudflare:workers';
+// Hookline: a self-hosted inbox for webhooks, as a Cloudflare Worker. The public address routes to
+// the inbox's Durable Object, which receives, keeps and serves every event; this file stays thin —
+// its own routes are only the health check.
+import { Inbox } from './inbox.ts';
 
 export interface Env { INBOX: DurableObjectNamespace<Inbox> }
 
-export class Inbox extends DurableObject<Env> {
-  async fetch(_req: Request): Promise<Response> {
-    return new Response('not yet', { status: 404 });
-  }
-}
+export { Inbox } from './inbox.ts';
 
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
