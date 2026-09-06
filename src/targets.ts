@@ -19,16 +19,28 @@ export function nextDelayS(attemptsMade: number): number | undefined {
 }
 
 /**
- * The POST the inbox makes to a target: the raw body byte for byte, the original headers prefixed
+ * The headers a delivery carries, whichever way it travels: the original headers prefixed
  * `X-Hookline-Original-`, and `X-Hookline-Event` naming the event. A replay — an explicit
- * re-delivery, never one of the originals — also carries `X-Hookline-Replay: true`. Everything
- * that would overwrite what the delivery itself needs (host, content-length) is left to fetch.
+ * re-delivery, never one of the originals — also carries `X-Hookline-Replay: true`. The URL
+ * delivery POSTs them; the socket frame carries the same list, so a laptop's local target sees
+ * the same delivery either way.
+ */
+export function deliveryHeaders(event: { id: string; headers: Array<[string, string]>; replay?: boolean }): Array<[string, string]> {
+  const headers: Array<[string, string]> = [];
+  for (const [name, value] of event.headers) headers.push([`X-Hookline-Original-${name}`, value]);
+  headers.push(['X-Hookline-Event', event.id]);
+  if (event.replay) headers.push(['X-Hookline-Replay', 'true']);
+  return headers;
+}
+
+/**
+ * The POST the inbox makes to a target: the raw body byte for byte, and the delivery's headers
+ * (deliveryHeaders). Everything that would overwrite what the delivery itself needs (host,
+ * content-length) is left to fetch.
  */
 export function deliveryRequest(target: Target, event: { id: string; headers: Array<[string, string]>; replay?: boolean }, body: Uint8Array): Request {
   const headers = new Headers();
-  for (const [name, value] of event.headers) headers.append(`X-Hookline-Original-${name}`, value);
-  headers.set('X-Hookline-Event', event.id);
-  if (event.replay) headers.set('X-Hookline-Replay', 'true');
+  for (const [name, value] of deliveryHeaders(event)) headers.append(name, value);
   return new Request(target.url, { method: 'POST', body: bytesView(body), headers });
 }
 

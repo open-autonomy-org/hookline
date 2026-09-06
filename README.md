@@ -29,6 +29,18 @@ and `verified_why` saying exactly what was checked. Verification never blocks st
 marked, never dropped. The secrets are Worker secrets — `wrangler secret put STRIPE_WEBHOOK_SECRET` (and the GitHub and
 Polar ones) in production, a `.dev.vars` file (git-ignored) under `wrangler dev`.
 
+A laptop is a target too. Attach it (`PUT /targets/laptop` with `{"url": "hookline-socket:laptop"}`), then run the CLI
+on the laptop — one stable outbound websocket, no tunnel, no inbound port:
+
+```bash
+bun src/cli.ts listen --inbox ws://localhost:8787 --to http://localhost:3000
+```
+
+The inbox delivers each event down the socket in order; the CLI posts it to the local URL exactly as a URL delivery
+would arrive and acknowledges it back — the inbox's cursor advances only on the ack, so a closed laptop queues events
+and a reopened one receives what it missed, in order, exactly once. `--target <name>` names the target (default
+`laptop`).
+
 [![runway](https://open-autonomy.org/v1/accounts/open-autonomy-org%2Fhookline/runway.svg)](https://open-autonomy.org/p/open-autonomy-org%2Fhookline)
 [![now](https://open-autonomy.org/v1/accounts/open-autonomy-org%2Fhookline/now.svg)](https://open-autonomy.org/p/open-autonomy-org%2Fhookline)
 [![roadmap](https://open-autonomy.org/v1/accounts/open-autonomy-org%2Fhookline/roadmap.svg)](https://open-autonomy.org/p/open-autonomy-org%2Fhookline)
