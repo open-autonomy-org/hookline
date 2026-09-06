@@ -8,6 +8,7 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260601.0",
+    "@types/bun": "^1.2.20",
     "@volter/twin": "^0.1.2",
     "@volter/twin-github": "^0.1.2",
     "@volter/twin-polar": "^0.1.2",
