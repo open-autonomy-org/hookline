@@ -1,0 +1,44 @@
+name: Deploy the reference inbox
+# The reference deployment of Hookline (the inbox this project runs for itself), from GitHub only:
+#  - Fires on a human-cut `deploy-v*` tag or a manual dispatch run FROM such a tag. The `production`
+#    environment admits only those tags, and its required reviewer approves each run, so the workflow that
+#    holds the token is always the one a human tagged, never the one on main.
+#  - Egress is locked to GitHub, npm and Cloudflare: the token cannot leave to any other host.
+#  - The token is a `production` environment secret scoped to Workers on this account; no machine holds it,
+#    and the agent that builds this project never sees it.
+on:
+  push:
+    tags: ['deploy-v*']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Lock down egress (the deploy token must not leave to a non-Cloudflare host)
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: block
+          allowed-endpoints: >
+            api.github.com:443
+            github.com:443
+            codeload.github.com:443
+            objects.githubusercontent.com:443
+            release-assets.githubusercontent.com:443
+            registry.npmjs.org:443
+            api.cloudflare.com:443
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.3.10
+          no-cache: true # no restored cache can poison a privileged deploy
+      - name: Install (frozen)
+        run: bun install --frozen-lockfile
+      - name: Deploy (the lockfile-pinned wrangler; the Worker says which commit it runs)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          WRANGLER_SEND_METRICS: "false"
+        run: bunx wrangler deploy --define HOOKLINE_VERSION:"\"$(git rev-parse --short HEAD)\""

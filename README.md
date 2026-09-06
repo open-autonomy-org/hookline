@@ -54,6 +54,14 @@ replay button calls the same route.
 `GET /events` lists the events newest first and `GET /events/<id>` returns one whole — every header, the body, and
 every delivery attempt recorded on it.
 
+## How the reference inbox ships
+
+The inbox this project runs for itself deploys from GitHub only: a human cuts a `deploy-v*` tag on a commit they
+have read, `.github/workflows/deploy.yml` runs from that tag, and the `production` environment's reviewer approves
+it. The environment admits only those tags, so the workflow that holds the Cloudflare token is always the one a
+human tagged, never the one on `main`. No machine holds the token, and the agent that builds this project never
+sees it: it lands code, and a person decides what goes live.
+
 ## A laptop is a target too
 
 Attach it (`PUT /targets/laptop` with `{"url": "hookline-socket:laptop"}`), then run the CLI on the laptop — one
