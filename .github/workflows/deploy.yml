@@ -42,3 +42,17 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           WRANGLER_SEND_METRICS: "false"
         run: bunx wrangler deploy --define HOOKLINE_VERSION:"\"$(git rev-parse --short HEAD)\""
+      - name: Install the inbox's own secrets (each a production environment secret; the ones that are set)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          WRANGLER_SEND_METRICS: "false"
+          STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
+          GITHUB_WEBHOOK_SECRET: ${{ secrets.GH_WEBHOOK_SECRET }} # GitHub forbids secret names starting with GITHUB_
+          POLAR_WEBHOOK_SECRET: ${{ secrets.POLAR_WEBHOOK_SECRET }}
+          HOOKLINE_READ_TOKEN: ${{ secrets.HOOKLINE_READ_TOKEN }}
+        run: |
+          for name in STRIPE_WEBHOOK_SECRET GITHUB_WEBHOOK_SECRET POLAR_WEBHOOK_SECRET HOOKLINE_READ_TOKEN; do
+            v="${!name}"; [ -n "$v" ] || { echo "$name: not set in the environment; left alone"; continue; }
+            printf '%s' "$v" | bunx wrangler secret put "$name" >/dev/null && echo "$name: installed"
+          done
