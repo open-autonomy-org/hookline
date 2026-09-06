@@ -448,7 +448,7 @@ export class Inbox extends DurableObject<Env> {
     const socket = this.socketOf(name);
     if (!socket) return false;
     const rows = this.sql.exec(
-      `SELECT d.attempts AS attempts, e.id AS event_id, e.headers AS headers, e.body AS body
+      `SELECT d.attempts AS attempts, d.replay AS replay, e.id AS event_id, e.headers AS headers, e.body AS body
        FROM deliveries d JOIN events e ON e.id = d.event_id WHERE d.id = ?`,
       deliveryId,
     ).toArray();
@@ -463,7 +463,7 @@ export class Inbox extends DurableObject<Env> {
     );
     const body = new Uint8Array(row.body as ArrayBuffer);
     const headers = JSON.parse(row.headers as string) as Array<[string, string]>;
-    socket.send(deliveryFrame(deliveryId, attempt, String(row.event_id), headers, body));
+    socket.send(deliveryFrame(deliveryId, attempt, String(row.event_id), headers, body, Number(row.replay) > 0));
     await this.wake();
     return true;
   }

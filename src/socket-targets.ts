@@ -17,8 +17,8 @@ import { deliveryHeaders } from './targets.ts';
  * base64, and the headers a URL delivery would carry — already prefixed, so the laptop is a
  * dumb pipe and its local target sees the same delivery either way.
  */
-export function deliveryFrame(delivery: number, attempt: number, eventId: string, headers: Array<[string, string]>, body: Uint8Array): string {
-  return JSON.stringify({ v: 1, delivery, attempt, event: eventId, headers: [...deliveryHeaders({ id: eventId, headers })], body: toBase64(body) });
+export function deliveryFrame(delivery: number, attempt: number, eventId: string, headers: Array<[string, string]>, body: Uint8Array, replay = false): string {
+  return JSON.stringify({ v: 1, delivery, attempt, event: eventId, headers: [...deliveryHeaders({ id: eventId, headers, replay })], body: toBase64(body) });
 }
 
 /** What a laptop sends back up the socket: an ack for a frame it delivered locally, or a nack for one it could not. */
