@@ -34,10 +34,15 @@ export class Inbox extends DurableObject<Env> {
       time TEXT NOT NULL,
       size INTEGER NOT NULL,
       headers TEXT NOT NULL,
-      body BLOB NOT NULL
+      body BLOB NOT NULL,
+      verified INTEGER NOT NULL DEFAULT 0,
+      verified_why TEXT NOT NULL DEFAULT ''
     )`);
-    this.sql.exec('ALTER TABLE events ADD COLUMN verified INTEGER NOT NULL DEFAULT 0');
-    this.sql.exec('ALTER TABLE events ADD COLUMN verified_why TEXT NOT NULL DEFAULT \'\'');
+    // An inbox born before the verdict columns existed is migrated in place, once: the ALTERs
+    // above only run where the columns are missing (SQLite throws on a duplicate column).
+    const columns = new Set(this.sql.exec('PRAGMA table_info(events)').toArray().map((row) => String(row.name)));
+    if (!columns.has('verified')) this.sql.exec('ALTER TABLE events ADD COLUMN verified INTEGER NOT NULL DEFAULT 0');
+    if (!columns.has('verified_why')) this.sql.exec(`ALTER TABLE events ADD COLUMN verified_why TEXT NOT NULL DEFAULT ''`);
     this.sql.exec(`CREATE TABLE IF NOT EXISTS targets (
       name TEXT PRIMARY KEY,
       url TEXT NOT NULL
