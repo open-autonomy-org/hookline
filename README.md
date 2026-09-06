@@ -13,7 +13,12 @@ every header, the raw body byte for byte — and answered `200` with the id; `GE
 every attached target: `PUT /targets/<name>` with `{"url": ...}` attaches one (and delivers the backlog to it),
 `GET /targets` lists them. A delivery is the event as a `POST`: the raw body, the original headers under
 `X-Hookline-Original-`, and `X-Hookline-Event` naming the event. Any 2xx acknowledges it; anything else is retried —
-1s, 5s, 30s, 2m, 10m, then hourly for a day — and every attempt is recorded. `CONSTITUTION.md` says where it is going,
+1s, 5s, 30s, 2m, 10m, then hourly for a day — and every attempt is recorded. Anything already delivered can be
+delivered again, explicitly and recorded as a replay: `POST /events/<id>/replay` with `{"target": <name>}` delivers
+that event to that target again, and `POST /targets/<name>/replay?from=<event id>` (that event and everything after
+it) or `?since=<ISO time>` (everything stored at or after the time) replays a range, in order. A replay carries
+`X-Hookline-Replay: true` on the wire, shows as `replay: true` on the event's recorded attempts, and queues behind
+the originals with the same retries. `CONSTITUTION.md` says where it is going,
 and the board says what is next. Every event's signature is verified with its vendor's own scheme against the secret
 in the Worker's bindings — `STRIPE_WEBHOOK_SECRET` for `/in/stripe`, Stripe's `Stripe-Signature` scheme (`t=`/`v1=`,
 HMAC-SHA256 over `t.body`, a 300s tolerance window); `GITHUB_WEBHOOK_SECRET` for `/in/github`, GitHub's
