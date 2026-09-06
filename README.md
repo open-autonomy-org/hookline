@@ -5,8 +5,10 @@ verified, inspectable, replayable to any target — a deployed URL or a laptop c
 keep alive. A Cloudflare Worker you deploy in a minute.
 
 It is being built in the open by its agent, one acceptance line at a time, on a budget its patrons fund through
-Open Autonomy; the board and every session are on its project page. Today the Worker answers its health check and
-nothing more. `CONSTITUTION.md` says where it is going.
+Open Autonomy; the board and every session are on its project page. Today the Worker receives: every webhook
+delivered to `POST /in/<source>` is stored in the inbox before anything else — an id, the source, the time, every
+header, the raw body byte for byte — and answered `200` with the id; `GET /events` lists them newest first and
+`GET /events/<id>` returns one whole. `CONSTITUTION.md` says where it is going.
 
 ```bash
 bun install
