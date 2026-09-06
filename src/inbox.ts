@@ -297,7 +297,8 @@ export class Inbox extends DurableObject<Env> {
     }
     let queued = 0;
     for (const id of ids) {
-      const result = this.sql.exec(
+      const before = this.countReplays(id, name);
+      this.sql.exec(
         `INSERT INTO deliveries (event_id, target, next_attempt_s, attempts, done, replay)
          SELECT ?, ?, 0, 0, 0,
            CASE WHEN EXISTS (SELECT 1 FROM deliveries d WHERE d.event_id = ? AND d.target = ? AND d.replay > 0 AND d.done = 0)
@@ -307,10 +308,17 @@ export class Inbox extends DurableObject<Env> {
          ON CONFLICT (event_id, target, replay) DO NOTHING`,
         id, name, id, name, id, name, id, name, id,
       );
-      queued += result.rowsWritten;
+      queued += this.countReplays(id, name) - before;
     }
     await this.wake();
     return Response.json({ target: name, queued });
+  }
+
+  /** How many replay deliveries an event already has queued or finished for a target. */
+  private countReplays(id: string, name: string): number {
+    return Number(this.sql.exec(
+      'SELECT count(*) AS n FROM deliveries WHERE event_id = ? AND target = ? AND replay > 0', id, name,
+    ).toArray()[0].n);
   }
 
   /** Run everything due for one target now; another target's run never waits on it. */
