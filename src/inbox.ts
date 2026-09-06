@@ -19,13 +19,28 @@
 // queue additional delivery rows flagged `replay`, which ride the same queue as the originals —
 // behind them in arrival order — with the same retries and recorded attempts, and reach the target
 // marked `X-Hookline-Replay: true`. The originals are replay 0; a replay is never one of them.
+//
+// A laptop is a target too: it offers no URL, because a laptop opens no inbound port. It is
+// attached with `PUT /targets/<name>` and url `hookline-socket:<name>`, and attaches by connecting
+// OUT to `GET /targets/<name>/socket`. The inbox delivers down that socket in delivery order from
+// the target's cursor, one frame at a time, stop-and-wait: the queue holds at each frame until the
+// laptop answers — ack (its local POST answered 2xx; the cursor advances only then) or nack
+// (recorded like any failed attempt and retried on the socket on the usual schedule). The wire
+// protocol lives in src/socket-targets.ts. A frame the laptop never answers is re-sent when its
+// deadline passes; a laptop that is away simply holds the frame — nothing is lost — and a
+// reattaching one is handed what it missed, in order, exactly once. Every attempt — frame sent,
+// ack, nack — is recorded on the event.
 import { DurableObject } from 'cloudflare:workers';
 import { nextDelayS, deliveryRequest, type Target } from './targets.ts';
+import { decodeSocketMessage, deliveryFrame } from './socket-targets.ts';
 import { verifyEvent, type Verdict } from './verify.ts';
 import type { Env } from './worker.ts';
 
 /** No attempt is scheduled at or before this: the queue's floor is "now" (an alarm at 0 is an error). */
 const MS_FLOOR = 1;
+
+/** How long a delivered frame may sit unanswered before the inbox sends it again: the re-send deadline. */
+const SOCKET_RESEND_MS = 60_000;
 
 export class Inbox extends DurableObject<Env> {
   private readonly sql: SqlStorage;
@@ -53,6 +68,11 @@ export class Inbox extends DurableObject<Env> {
       name TEXT PRIMARY KEY,
       url TEXT NOT NULL
     )`);
+    // A target born before sockets existed has nowhere to record the frame it is holding: the
+    // pending marker is migrated in place, once, the way the verdict columns are (SQLite throws
+    // on a duplicate column).
+    const targetColumns = new Set(this.sql.exec('PRAGMA table_info(targets)').toArray().map((row) => String(row.name)));
+    if (!targetColumns.has('pending')) this.sql.exec('ALTER TABLE targets ADD COLUMN pending INTEGER NOT NULL DEFAULT 0');
     this.sql.exec(`CREATE TABLE IF NOT EXISTS deliveries (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       event_id TEXT NOT NULL REFERENCES events(id),
@@ -106,6 +126,10 @@ export class Inbox extends DurableObject<Env> {
         return await this.show(decodeSegment(url.pathname, '/events/'.length));
       }
       if (req.method === 'PUT' && url.pathname.startsWith('/targets/')) {
+        const rest = url.pathname.slice('/targets/'.length);
+        if (rest.endsWith('/socket') && url.searchParams.get('upgrade') === 'websocket') {
+          return this.socketUpgrade(decodeSegment(rest.slice(0, rest.length - '/socket'.length)), req);
+        }
         return await this.attach(decodeSegment(url.pathname, '/targets/'.length), req);
       }
       if (req.method === 'GET' && url.pathname === '/targets') return Response.json(this.targets());
@@ -231,13 +255,16 @@ export class Inbox extends DurableObject<Env> {
     const body = (await req.json()) as { url?: unknown };
     const url = body.url;
     if (typeof url !== 'string' || !/^https?:\/\//.test(url)) {
-      throw new Error(`PUT /targets/${name}: url must be an http(s) URL, got ${JSON.stringify(url)}`);
+      if (url !== `hookline-socket:${name}`) {
+        throw new Error(`PUT /targets/${name}: url must be an http(s) URL, or hookline-socket:${name} for a laptop that connects out over a socket (got ${JSON.stringify(url)})`);
+      }
     }
     this.sql.exec(
       'INSERT INTO targets (name, url) VALUES (?, ?) ON CONFLICT (name) DO UPDATE SET url = excluded.url',
       name, url,
     );
     this.enqueueAll();
+    await this.sweepSocket(name);
     await this.wake();
     return Response.json({ name, url, targets: this.targets() });
   }
@@ -247,6 +274,187 @@ export class Inbox extends DurableObject<Env> {
       name: row.name as string,
       url: row.url as string,
     }));
+  }
+
+  /**
+   * A laptop attaching over a socket: the laptop connects out — `GET /targets/<name>/socket` —
+   * the inbox holds the socket, and no inbound port exists on the laptop. The target must be
+   * attached as a socket target (`hookline-socket:<name>`); its url is never delivered to. The
+   * same target may not hold two sockets: the newer connection replaces the older, whose frames
+   * would answer into a void. On open the target is swept: the frame it holds goes first, or the
+   * queue's head if its hands are free.
+   */
+  private socketUpgrade(name: string, req: Request): Response {
+    const target = this.targets().find((candidate) => candidate.name === name);
+    if (!target || !target.url.startsWith('hookline-socket:')) {
+      throw new Error(`GET /targets/${name}/socket: no socket target with that name is attached (attach it with PUT /targets/${name} and url hookline-socket:${name})`);
+    }
+    const pair = new WebSocketPair();
+    this.ctx.acceptWebSocket(pair[1], [name]);
+    this.sockets.set(name, pair[1]);
+    this.forgetTarget(name);
+    void this.deliverNextFrame(name);
+    return new Response(null, { status: 101, webSocket: pair[1] });
+  }
+
+  /** One message from a laptop on its socket: the answer to the frame it holds. */
+  private async socketReceive(name: string, ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+    if (typeof message !== 'string') {
+      ws.close(1003, 'the protocol is text frames');
+      return;
+    }
+    let answer;
+    try {
+      answer = decodeSocketMessage(message);
+    } catch (cause) {
+      ws.close(1003, cause instanceof Error ? cause.message : String(cause));
+      return;
+    }
+    if (answer.kind === 'ack') {
+      await this.socketAck(name, answer.delivery, answer.status);
+      return;
+    }
+    await this.socketNack(name, answer.delivery, answer.status, answer.error);
+  }
+
+  /** The laptop delivered the frame locally: record the attempt, finish, advance the cursor. */
+  private async socketAck(name: string, deliveryId: number, status: number): Promise<void> {
+    const row = this.sql.exec('SELECT attempts FROM deliveries WHERE id = ?', deliveryId).toArray()[0];
+    if (!row) return; // an ack for a delivery the queue no longer holds — a crossing duplicate
+    const attempts = Number(row.attempts);
+    this.sql.exec(
+      'INSERT INTO attempts (delivery_id, target, time, status, error) VALUES (?, ?, ?, ?, ?)',
+      deliveryId, name, new Date().toISOString(), status, null,
+    );
+    this.sql.exec('UPDATE deliveries SET attempts = ?, done = 1 WHERE id = ?', attempts, deliveryId);
+    this.forgetTarget(name);
+    await this.deliverNextFrame(name);
+  }
+
+  /** The laptop's local POST failed: record the attempt like any failed one and re-send on the usual schedule. */
+  private async socketNack(name: string, deliveryId: number, status: number | null, error: string): Promise<void> {
+    const row = this.sql.exec('SELECT attempts FROM deliveries WHERE id = ?', deliveryId).toArray()[0];
+    if (!row) return; // a nack for a delivery the queue no longer holds — a crossing duplicate
+    const attempts = Number(row.attempts);
+    this.sql.exec(
+      'INSERT INTO attempts (delivery_id, target, time, status, error) VALUES (?, ?, ?, ?, ?)',
+      deliveryId, name, new Date().toISOString(), status, error,
+    );
+    const delayS = nextDelayS(attempts);
+    if (delayS === undefined) {
+      this.sql.exec('UPDATE deliveries SET attempts = ?, next_attempt_s = -1 WHERE id = ?', attempts, deliveryId);
+      this.forgetTarget(name);
+      await this.deliverNextFrame(name);
+      return;
+    }
+    this.sql.exec('UPDATE deliveries SET attempts = ?, next_attempt_s = ? WHERE id = ?', attempts, Date.now() + delayS * 1000, deliveryId);
+    this.forgetTarget(name);
+    await this.wake();
+  }
+
+  /** The socket dropped: forget it, and leave the frame it held pending — nothing is lost, nothing is retried into a void. */
+  private socketClosed(name: string, ws: WebSocket): void {
+    const held = this.sockets.get(name);
+    if (held === ws) this.sockets.delete(name);
+  }
+
+  /**
+   * Re-send what a target holds, or hand it its next frame: called when the target attaches —
+   * a laptop that is here now is served now, whatever the schedule says. The frame it holds
+   * (left pending by a dead connection) is the queue's head and goes first.
+   */
+  private async sweepSocket(name: string): Promise<void> {
+    const held = this.heldBy(name);
+    if (held !== 0) {
+      await this.socketSend(name, held);
+      return;
+    }
+    const head = this.socketHead(name);
+    if (head) await this.socketSend(name, head.id);
+  }
+
+  /** What delivery a target holds pending — 0 when its hands are free. */
+  private heldBy(name: string): number {
+    const row = this.sql.exec('SELECT pending FROM targets WHERE name = ?', name).toArray()[0];
+    return row ? Number(row.pending) : 0;
+  }
+
+  /** Forget that a target holds a frame (its ack or nack answered it, or its socket went away). */
+  private forgetTarget(name: string): void {
+    this.sql.exec('UPDATE targets SET pending = 0 WHERE name = ?', name);
+  }
+
+  /**
+   * A socket target's queue head: its oldest unfinished delivery, and whether the schedule says
+   * it may go now. The head is first by id, always — a retried frame keeps its place ahead of
+   * every event stored after it, so the laptop receives events in order even across retries.
+   */
+  private socketHead(name: string): { id: number; ready: boolean } | undefined {
+    const row = this.sql.exec(
+      'SELECT id, next_attempt_s FROM deliveries WHERE target = ? AND done = 0 ORDER BY id LIMIT 1',
+      name,
+    ).toArray()[0];
+    if (!row) return undefined;
+    return { id: Number(row.id), ready: Number(row.next_attempt_s) >= 0 && Number(row.next_attempt_s) <= Date.now() };
+  }
+
+  /**
+   * Drive a socket target's queue: one frame at a time, in order from the cursor. The inbox's
+   * queue runner calls this whenever work for the target is due; if the laptop holds a frame,
+   * nothing is sent; if its socket is away, a ready head is pushed back so the queue does not
+   * spin on an alarm with nowhere to send — a reattaching laptop is swept immediately.
+   */
+  private async deliverNextFrame(name: string): Promise<void> {
+    if (this.heldBy(name) !== 0) return;
+    const head = this.socketHead(name);
+    if (!head) return;
+    const socket = this.sockets.get(name);
+    if (!socket) {
+      if (head.ready) this.sql.exec('UPDATE deliveries SET next_attempt_s = ? WHERE id = ?', Date.now() + SOCKET_RESEND_MS, head.id);
+      return;
+    }
+    if (head.ready) await this.socketSend(name, head.id);
+  }
+
+  /** Send one delivery down the target's socket and hold it there; false when the queue must hold. */
+  private async socketSend(name: string, deliveryId: number): Promise<boolean> {
+    const socket = this.sockets.get(name);
+    if (!socket) return false;
+    const rows = this.sql.exec(
+      `SELECT d.attempts AS attempts, e.id AS event_id, e.headers AS headers, e.body AS body
+       FROM deliveries d JOIN events e ON e.id = d.event_id WHERE d.id = ?`,
+      deliveryId,
+    ).toArray();
+    const row = rows[0];
+    if (!row) throw new Error(`delivery ${String(deliveryId)} vanished from the queue`);
+    const attempt = Number(row.attempts) + 1;
+    this.sql.exec('UPDATE deliveries SET attempts = ?, next_attempt_s = ? WHERE id = ?', attempt, Date.now() + SOCKET_RESEND_MS, deliveryId);
+    this.sql.exec('UPDATE targets SET pending = ? WHERE name = ?', deliveryId, name);
+    this.sql.exec(
+      'INSERT INTO attempts (delivery_id, target, time, status, error) VALUES (?, ?, ?, ?, ?)',
+      deliveryId, name, new Date().toISOString(), null, 'sent, awaiting the target',
+    );
+    const body = new Uint8Array(row.body as ArrayBuffer);
+    const headers = JSON.parse(row.headers as string) as Array<[string, string]>;
+    socket.send(deliveryFrame(deliveryId, attempt, String(row.event_id), headers, body));
+    await this.wake();
+    return true;
+  }
+
+  /** Every socket target with a frame whose re-send deadline passed without an answer. */
+  private async resendDue(): Promise<void> {
+    const rows = this.sql.exec(
+      'SELECT name, pending FROM targets WHERE pending <> 0',
+    ).toArray();
+    const now = Date.now();
+    for (const row of rows) {
+      const name = String(row.name);
+      const held = Number(row.pending);
+      const socket = this.sockets.get(name);
+      if (!socket) continue;
+      const due = this.sql.exec('SELECT next_attempt_s FROM deliveries WHERE id = ?', held).toArray()[0];
+      if (due && Number(due.next_attempt_s) <= now) await this.socketSend(name, held);
+    }
   }
 
   /**
@@ -325,11 +533,20 @@ export class Inbox extends DurableObject<Env> {
     ).toArray()[0].n);
   }
 
-  /** Run everything due for one target now; another target's run never waits on it. */
+  /**
+   * Run everything due for one target now; another target's run never waits on it. A socket
+   * target is driven one frame per run — stop-and-wait: its next frame goes when this one is
+   * answered, or when a later run finds its hands free.
+   */
   private async run(targetName: string): Promise<void> {
     if (this.running.has(targetName)) return;
     this.running.add(targetName);
     try {
+      const target = this.targets().find((candidate) => candidate.name === targetName);
+      if (target && target.url.startsWith('hookline-socket:')) {
+        await this.deliverNextFrame(targetName);
+        return;
+      }
       for (;;) {
         const due = this.sql.exec(
           'SELECT id, event_id, attempts, replay FROM deliveries WHERE target = ? AND done = 0 AND next_attempt_s >= 0 AND next_attempt_s <= ? ORDER BY next_attempt_s, id LIMIT 1',
@@ -395,9 +612,10 @@ export class Inbox extends DurableObject<Env> {
     if (current === null || current > nextMs) await this.ctx.storage.setAlarm(nextMs);
   }
 
-  /** The alarm wakes every target with work due; the queues re-arm whatever remains. */
+  /** The alarm wakes every target with work due, re-sends what went unanswered, and re-arms what remains. */
   async alarm(): Promise<void> {
     this.enqueueAll();
+    await this.resendDue();
     const due = this.sql.exec(
       'SELECT DISTINCT target FROM deliveries WHERE done = 0 AND next_attempt_s >= 0 AND next_attempt_s <= ?',
       Date.now(),
@@ -408,6 +626,9 @@ export class Inbox extends DurableObject<Env> {
 
   /** Guard against two runs of one target interleaving (an alarm and an attach waking it at once). */
   private readonly running = new Set<string>();
+
+  /** The socket each attached laptop holds, by target name — the laptop connects out; the inbox holds it. */
+  private readonly sockets = new Map<string, WebSocket>();
 }
 
 /** A single path segment after `skip` bytes, decoded. A malformed encoding fails loudly. */
