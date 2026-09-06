@@ -292,11 +292,11 @@ export class Inbox extends DurableObject<Env> {
       throw new Error(`GET /targets/${name}/socket: no socket target with that name is attached (attach it with PUT /targets/${name} and url hookline-socket:${name})`);
     }
     const pair = new WebSocketPair();
-    this.ctx.acceptWebSocket(pair[1], [name]);
+    this.ctx.acceptWebSocket(pair[1], [name]); // the server end: its messages arrive in webSocketMessage
     this.sockets.set(name, pair[1]);
     this.forgetTarget(name);
     void this.deliverNextFrame(name);
-    return new Response(null, { status: 101, webSocket: pair[1] });
+    return new Response(null, { status: 101, webSocket: pair[0] }); // the client end rides back to the laptop
   }
 
   /** One message from a laptop on its socket: the answer to the frame it holds. */
