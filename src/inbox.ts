@@ -246,6 +246,7 @@ export class Inbox extends DurableObject<Env> {
 
   /** The alarm wakes every target with work due; the queues re-arm whatever remains. */
   async alarm(): Promise<void> {
+    this.enqueueAll();
     const due = this.sql.exec(
       'SELECT DISTINCT target FROM deliveries WHERE done = 0 AND next_attempt_s >= 0 AND next_attempt_s <= ?',
       Date.now(),
