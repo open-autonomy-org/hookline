@@ -16,10 +16,13 @@ every attached target: `PUT /targets/<name>` with `{"url": ...}` attaches one (a
 1s, 5s, 30s, 2m, 10m, then hourly for a day — and every attempt is recorded. `CONSTITUTION.md` says where it is going,
 and the board says what is next. Every event's signature is verified with its vendor's own scheme against the secret
 in the Worker's bindings — `STRIPE_WEBHOOK_SECRET` for `/in/stripe`, Stripe's `Stripe-Signature` scheme (`t=`/`v1=`,
-HMAC-SHA256 over `t.body`, a 300s tolerance window) — and the verdict is recorded on the event: `verified: true|false`
+HMAC-SHA256 over `t.body`, a 300s tolerance window); `GITHUB_WEBHOOK_SECRET` for `/in/github`, GitHub's
+`X-Hub-Signature-256` scheme (`sha256=` HMAC-SHA256 over the body); `POLAR_WEBHOOK_SECRET` for `/in/polar`, the
+Standard Webhooks scheme Polar signs with (`webhook-id`/`webhook-timestamp`/`webhook-signature` v1, HMAC-SHA256 over
+`id.timestamp.body`, base64, a 300s tolerance window) — and the verdict is recorded on the event: `verified: true|false`
 and `verified_why` saying exactly what was checked. Verification never blocks storage: an unverified event is kept and
-marked, never dropped. The secret is a Worker secret — `wrangler secret put STRIPE_WEBHOOK_SECRET` in production, a
-`.dev.vars` file (git-ignored) under `wrangler dev`.
+marked, never dropped. The secrets are Worker secrets — `wrangler secret put STRIPE_WEBHOOK_SECRET` (and the GitHub and
+Polar ones) in production, a `.dev.vars` file (git-ignored) under `wrangler dev`.
 
 [![runway](https://open-autonomy.org/v1/accounts/open-autonomy-org%2Fhookline/runway.svg)](https://open-autonomy.org/p/open-autonomy-org%2Fhookline)
 [![now](https://open-autonomy.org/v1/accounts/open-autonomy-org%2Fhookline/now.svg)](https://open-autonomy.org/p/open-autonomy-org%2Fhookline)

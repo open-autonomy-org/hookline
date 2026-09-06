@@ -1,6 +1,15 @@
 # Changelog
 
 ## Unreleased
+- GitHub's and Polar's signatures are verified: an event delivered to `/in/github` is checked with GitHub's own scheme —
+  the `X-Hub-Signature-256` header (`sha256=`, HMAC-SHA256 over the body keyed by `GITHUB_WEBHOOK_SECRET`) — and an event
+  delivered to `/in/polar` with the Standard Webhooks scheme Polar signs (`webhook-id`/`webhook-timestamp`/
+  `webhook-signature` v1, HMAC-SHA256 over `id.timestamp.body`, the secret's base64 bytes as the key, a 300s tolerance
+  window) keyed by `POLAR_WEBHOOK_SECRET`. The verdict is recorded and shown like Stripe's. Proven in the world against
+  the GitHub twin's own signed repository-webhook pipeline (the twin builds and signs the payload, the world registers
+  the hook) and against Polar-shaped events signed the way Polar signs them (Standard Webhooks over real twin state):
+  a signed delivery arrives `verified: true`; the same body with a wrong secret, a stale timestamp, and no header each
+  arrive `verified: false` with the reason, kept and forwarded like any event.
 - Stripe's signature is verified: an event delivered to `/in/stripe` is checked with Stripe's own scheme — the
   `Stripe-Signature` header (`t=`/`v1=`, HMAC-SHA256 over `t.body` keyed by `STRIPE_WEBHOOK_SECRET` from the Worker's
   bindings, a 300s tolerance window) — and the verdict is recorded on the event (`verified: true|false`, `verified_why`),

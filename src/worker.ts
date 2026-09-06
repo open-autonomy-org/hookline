@@ -7,6 +7,8 @@ export interface Env {
   INBOX: DurableObjectNamespace<Inbox>;
   /** The vendor signing secrets verification verifies against — set as secrets (`wrangler secret put`, `.dev.vars` in dev). */
   STRIPE_WEBHOOK_SECRET?: string;
+  GITHUB_WEBHOOK_SECRET?: string;
+  POLAR_WEBHOOK_SECRET?: string;
 }
 
 export { Inbox } from './inbox.ts';
