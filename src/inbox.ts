@@ -126,13 +126,14 @@ export class Inbox extends DurableObject<Env> {
         return await this.show(decodeSegment(url.pathname, '/events/'.length));
       }
       if (req.method === 'PUT' && url.pathname.startsWith('/targets/')) {
-        const rest = url.pathname.slice('/targets/'.length);
-        if (rest.endsWith('/socket') && url.searchParams.get('upgrade') === 'websocket') {
-          return this.socketUpgrade(decodeSegment(rest.slice(0, rest.length - '/socket'.length)), req);
-        }
         return await this.attach(decodeSegment(url.pathname, '/targets/'.length), req);
       }
       if (req.method === 'GET' && url.pathname === '/targets') return Response.json(this.targets());
+      if (req.method === 'GET' && url.pathname.startsWith('/targets/') && url.pathname.endsWith('/socket') && url.searchParams.get('upgrade') === 'websocket') {
+        // The laptop's websocket handshake is a GET with `Upgrade: websocket` (it is also sent as
+        // a query parameter, since not every client can set the header on the way out).
+        return this.socketUpgrade(decodeSegment(url.pathname.slice('/targets/'.length, url.pathname.length - '/socket'.length)), req);
+      }
       if (req.method === 'POST' && url.pathname.startsWith('/events/')) {
         const rest = url.pathname.slice('/events/'.length);
         const slash = rest.lastIndexOf('/');
