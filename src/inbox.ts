@@ -99,23 +99,23 @@ export class Inbox extends DurableObject<Env> {
     const url = new URL(req.url);
     try {
       if (req.method === 'POST' && url.pathname.startsWith('/in/')) {
-        return this.receive(this.sourceOf(url.pathname), req);
+        return await this.receive(this.sourceOf(url.pathname), req);
       }
       if (req.method === 'GET' && url.pathname === '/events') return this.list();
       if (req.method === 'GET' && url.pathname.startsWith('/events/')) {
-        return this.show(decodeSegment(url.pathname, '/events/'.length));
+        return await this.show(decodeSegment(url.pathname, '/events/'.length));
       }
       if (req.method === 'PUT' && url.pathname.startsWith('/targets/')) {
-        return this.attach(decodeSegment(url.pathname, '/targets/'.length), req);
+        return await this.attach(decodeSegment(url.pathname, '/targets/'.length), req);
       }
       if (req.method === 'GET' && url.pathname === '/targets') return Response.json(this.targets());
       if (req.method === 'POST' && url.pathname.startsWith('/events/')) {
         const rest = url.pathname.slice('/events/'.length);
         const slash = rest.lastIndexOf('/');
         if (slash !== -1 && rest.slice(slash + 1) === 'replay') {
-          return this.replayEvent(decodeSegment(rest.slice(0, slash)), req);
+          return await this.replayEvent(decodeSegment(rest.slice(0, slash)), req);
         }
-        return this.show(decodeSegment(rest));
+        return await this.show(decodeSegment(rest));
       }
       if (req.method === 'POST' && url.pathname.startsWith('/targets/')) {
         const rest = url.pathname.slice('/targets/'.length);
@@ -126,7 +126,7 @@ export class Inbox extends DurableObject<Env> {
           if ((from === null) === (since === null)) {
             throw new Error(`POST /targets/${decodeSegment(rest.slice(0, slash))}/replay wants exactly one range: ?from=<event id> or ?since=<ISO time>`);
           }
-          return this.replayRange(decodeSegment(rest.slice(0, slash)), from, since);
+          return await this.replayRange(decodeSegment(rest.slice(0, slash)), from, since);
         }
       }
       return new Response('not found\n', { status: 404 });
@@ -294,6 +294,10 @@ export class Inbox extends DurableObject<Env> {
     const target = this.targets().find((candidate) => candidate.name === name);
     if (!target) {
       throw new Error(`replay to ${JSON.stringify(name)}: no target with that name is attached (attach it with PUT /targets/${name})`);
+    }
+    for (const id of ids) {
+      const exists = this.sql.exec('SELECT 1 AS ok FROM events WHERE id = ?', id).toArray();
+      if (exists.length === 0) throw new Error(`replay to ${JSON.stringify(name)}: no event ${JSON.stringify(id)} in the inbox`);
     }
     let queued = 0;
     for (const id of ids) {
