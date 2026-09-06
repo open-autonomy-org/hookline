@@ -284,10 +284,11 @@ export class Inbox extends DurableObject<Env> {
   }
 
   /**
-   * Queue the named events to the target as replays — additional delivery rows, one per event,
-   * distinct from the originals and recorded as what they are. The queue's own key keeps a
-   * duplicate request idempotent: a second request for the same range is answered with what is
-   * already pending rather than queuing it twice.
+   * Queue the named events to the target as replays — additional delivery rows, distinct from the
+   * originals and recorded as what they are. Replays are batched: an event's first replay request
+   * queues batch 1, and a request after a batch has finished queues the next batch — asking again
+   * delivers again. A request while a batch is still in flight re-uses it, so two callers asking
+   * at once do not double-deliver. `queued` counts the rows newly written.
    */
   private async replay(ids: string[], name: string): Promise<Response> {
     const target = this.targets().find((candidate) => candidate.name === name);
@@ -297,14 +298,19 @@ export class Inbox extends DurableObject<Env> {
     let queued = 0;
     for (const id of ids) {
       const result = this.sql.exec(
-        `INSERT OR IGNORE INTO deliveries (event_id, target, next_attempt_s, attempts, done, replay)
-         SELECT ?, ?, 0, 0, 0, 1 WHERE EXISTS (SELECT 1 FROM events WHERE id = ?)`,
-        id, name, id,
+        `INSERT INTO deliveries (event_id, target, next_attempt_s, attempts, done, replay)
+         SELECT ?, ?, 0, 0, 0,
+           CASE WHEN EXISTS (SELECT 1 FROM deliveries d WHERE d.event_id = ? AND d.target = ? AND d.replay > 0 AND d.done = 0)
+                THEN (SELECT MAX(replay) FROM deliveries d2 WHERE d2.event_id = ? AND d2.target = ?)
+                ELSE COALESCE((SELECT MAX(replay) FROM deliveries d3 WHERE d3.event_id = ? AND d3.target = ?), 0) + 1 END
+         WHERE EXISTS (SELECT 1 FROM events WHERE id = ?)
+         ON CONFLICT (event_id, target, replay) DO NOTHING`,
+        id, name, id, name, id, name, id, name, id,
       );
       queued += result.rowsWritten;
     }
     await this.wake();
-    return Response.json({ target: name, events: ids, queued });
+    return Response.json({ target: name, queued });
   }
 
   /** Run everything due for one target now; another target's run never waits on it. */
@@ -318,7 +324,7 @@ export class Inbox extends DurableObject<Env> {
           targetName, Date.now(),
         ).toArray()[0];
         if (!due) break;
-        await this.attempt(String(due.id), String(due.event_id), targetName, Number(due.attempts), Number(due.replay) === 1);
+        await this.attempt(String(due.id), String(due.event_id), targetName, Number(due.attempts), Number(due.replay) > 0);
       }
     } finally {
       this.running.delete(targetName);
