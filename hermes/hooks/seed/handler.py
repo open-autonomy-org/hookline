@@ -1,27 +1,8 @@
-"""Seed the schedule and the board from the committed seeds on gateway startup.
+"""Seed the project-owned schedule on startup, preserving runtime job state.
 
-Two seeds, both in the agent's home: cron/jobs.seed.json (the schedule) and kanban.seed.json (the board's
-starting tasks, in order, each waiting on the one before it). Both are idempotent: a job is matched by name, a
-task by its idempotency key `seed:<key>`, so a boot never files twice and the owner's own tasks are untouched.
-
-The Open Autonomy repository commits the schedule definition in
-hermes/cron/jobs.seed.json (byte-stable) and git-ignores the runtime store
-hermes/cron/jobs.json, which Hermes rewrites on every tick with next_run_at /
-last_run_at / fire_claim etc. This hook reconciles the runtime store to the
-seed on every gateway boot so the committed definition stays the source of
-truth and no scheduler run-state ever churns the commit.
-
-Every seeded job is pinned to the provider and model hermes/config.yaml names,
-at creation and again on every boot the config moved: an unpinned job snapshots
-the global model when created and Hermes's drift guard skips its fires once the
-owner changes the model, stranding the schedule. Pinned, the job runs on the
-config's model, and the next boot after a change re-pins it.
-
-Idempotent: it only creates jobs that are in the seed and missing from the
-live store (matched by name). It never deletes, pauses, or edits existing
-jobs, so runtime state (completed runs, next_run_at) is preserved across
-restarts and an operator can still add jobs by hand without the seed
-clobbering them.
+The PM scrum reads ROADMAP.md and queues fleet work. kanban.seed.json is retained
+as historical migration input, never replayed into the board. Jobs remain pinned
+to the configured model/provider; owner-customized schedule definitions are preserved.
 """
 
 import json
@@ -65,7 +46,8 @@ def _configured(var: str) -> bool:
 
 
 def _deliver_target(name: str, deliver) -> object:
-    platform = str(deliver).strip().lower() if isinstance(deliver, str) else ""
+    # `slack:<channel>` / `discord:<channel>`: the platform is the word before the colon.
+    platform = str(deliver).strip().lower().split(":", 1)[0] if isinstance(deliver, str) else ""
     needs = _PLATFORM_CREDENTIALS.get(platform)
     if not needs or any(_configured(v) for v in needs):
         return deliver
@@ -105,65 +87,8 @@ def _seed_jobs() -> list:
     return [j for j in jobs if isinstance(j, dict)]
 
 
-# ---- the board -------------------------------------------------------------------------------------------------
-
-def _seed_tasks() -> tuple:
-    import os
-    # Every seed task works in the project checkout: the directory the gateway runs in.
-    workspace = f"dir:{os.getcwd()}"
-    seed_file = _hermes_home() / "kanban.seed.json"
-    if not seed_file.exists():
-        return workspace, []
-    try:
-        data = json.loads(seed_file.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as e:
-        logger.error("seed: failed to read %s: %s", seed_file, e)
-        return workspace, []
-    tasks = [t for t in data.get("tasks", []) if isinstance(t, dict) and t.get("key") and t.get("title")]
-    return workspace, tasks
-
-
-def _seed_board() -> None:
-    """File every seed task that is not on the board yet, each a child of the one before it, so the dispatcher
-    pulls them down one at a time in the seed's order. `hermes kanban create --idempotency-key` returns the
-    existing task for a key it has seen, so a second boot changes nothing."""
-    import subprocess
-    workspace, tasks = _seed_tasks()
-    if not tasks:
-        return
-    subprocess.run(["hermes", "kanban", "init"], capture_output=True, text=True)
-    previous = None
-    for spec in tasks:
-        body = "\n".join(f"- {line}" for line in spec.get("acceptance", []) if isinstance(line, str))
-        cmd = ["hermes", "kanban", "create", str(spec["title"]), "--body", body, "--assignee", "default",
-               "--workspace", workspace, "--idempotency-key", f"seed:{spec['key']}", "--created-by", "seed",
-               "--skill", "develop", "--json"]
-        if previous:
-            cmd += ["--parent", previous]
-
-        r = subprocess.run(cmd, capture_output=True, text=True)
-        if r.returncode != 0:
-            logger.error("seed: cannot file task '%s': %s", spec["key"], (r.stderr or r.stdout).strip()[-400:])
-            return
-        m = re.search(r'"id":\s*"([^"]+)"', r.stdout)
-        if not m:
-            logger.error("seed: no task id in the board's answer for '%s'", spec["key"])
-            return
-        previous = m.group(1)
-        # A task the seed holds (`"held": "<why>"`) is filed and parked in the board's Scheduled lane at once, for the
-        # owner to release with `hermes kanban unblock`; only at filing, so a release is never undone by the next
-        # boot. Parked, not blocked: the board escalates repeated blocks into triage and decomposition, and the
-        # PM never touches Scheduled.
-        held = spec.get("held")
-        created_at = re.search(r'"created_at":\s*(\d+)', r.stdout)
-        if held and created_at and time.time() - int(created_at.group(1)) < 120:
-            subprocess.run(["hermes", "kanban", "schedule", previous, str(held)], capture_output=True, text=True)
-    logger.info("seed: the board holds the %d seed task(s)", len(tasks))
-
-
 async def handle(event_type: str, context: dict) -> None:
     import os
-    _seed_board()
     try:
         from cron.jobs import create_job, load_jobs, update_job
     except Exception as e:  # pragma: no cover - import path depends on runtime
@@ -191,14 +116,27 @@ async def handle(event_type: str, context: dict) -> None:
             continue
         job = live_by_name.get(name)
         if job is not None:
-            if bool(spec.get("no_agent")) or ((job.get("model") or None) == model and (job.get("provider") or None) == provider):
+            # The seed is the job's definition: a prompt, a skill, a schedule, a monitor or a delivery that moved in
+            # the seed moves in the live job (its id, its history and its enabled state stay); the model pin follows
+            # config.yaml. What the seed does not name is left as the operator set it.
+            updates = {}
+            if not bool(spec.get("no_agent")) and ((job.get("model") or None) != model or (job.get("provider") or None) != provider):
+                updates.update({"model": model, "provider": provider})
+            for field, live_key in (("prompt", "prompt"), ("skills", "skills"), ("monitor_script", "monitor_script"), ("monitor_url", "monitor_url"), ("script", "script"), ("enabled_toolsets", "enabled_toolsets")):
+                if field in spec and (spec.get(field) or None) != (job.get(live_key) or None):
+                    updates[live_key] = spec.get(field) or None
+            if "deliver" in spec and _deliver_target(name, spec.get("deliver")) != job.get("deliver"):
+                updates["deliver"] = _deliver_target(name, spec.get("deliver"))
+            if "schedule" in spec and spec.get("schedule") != ((job.get("schedule") or {}).get("display") if isinstance(job.get("schedule"), dict) else job.get("schedule")):
+                updates["schedule"] = spec.get("schedule")
+            if not updates:
                 continue
             try:
-                update_job(job["id"], {"model": model, "provider": provider})
+                update_job(job["id"], updates)
                 repinned += 1
-                logger.info("seed: re-pinned job '%s' to %s / %s (config.yaml moved)", name, provider, model)
+                logger.info("seed: refreshed job '%s' from the seed (%s)", name, ", ".join(sorted(updates)))
             except Exception as e:
-                logger.error("seed: failed to re-pin job '%s': %s", name, e)
+                logger.error("seed: failed to refresh job '%s': %s", name, e)
             continue
         try:
             create_job(
@@ -206,10 +144,15 @@ async def handle(event_type: str, context: dict) -> None:
                 schedule=spec.get("schedule"),
                 name=name,
                 deliver=_deliver_target(name, spec.get("deliver")),
+                enabled_toolsets=spec.get("enabled_toolsets") or None,
                 skills=spec.get("skills") or None,
                 skill=spec.get("skill"),
                 workdir=os.getcwd(),
                 script=spec.get("script"),
+                # A monitor job runs its script (or reads its URL) on the schedule and wakes the agent only when the
+                # output changed, handing it the diff: how an engagement's brain watches a board without spending.
+                monitor_script=spec.get("monitor_script"),
+                monitor_url=spec.get("monitor_url"),
                 no_agent=bool(spec.get("no_agent")),
                 model=None if spec.get("no_agent") else model,
                 provider=None if spec.get("no_agent") else provider,
@@ -221,3 +164,55 @@ async def handle(event_type: str, context: dict) -> None:
 
     if created or repinned:
         logger.info("seed: seeded %d job(s) from jobs.seed.json, re-pinned %d", created, repinned)
+    _seed_webhooks()
+
+
+def _seed_webhooks() -> None:
+    """The project-owned webhook routes (cron/webhooks.seed.json): a route per entry, created when absent, its
+    prompt, skills, deliver, events, script and toolsets refreshed from the seed, its secret kept once made.
+    The seed never carries a secret; the route's is generated here and lives only in the home's
+    webhook_subscriptions.json, where the sender's door reads it."""
+    import secrets as _secrets
+    seed_file = _hermes_home() / "cron" / "webhooks.seed.json"
+    if not seed_file.exists():
+        return
+    try:
+        data = json.loads(seed_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        logger.error("seed: failed to read %s: %s", seed_file, e)
+        return
+    routes = data.get("routes", []) if isinstance(data, dict) else data
+    routes = [r for r in routes if isinstance(r, dict) and r.get("name")]
+    if not routes:
+        return
+    try:
+        from hermes_cli.webhook import _load_subscriptions, _save_subscriptions
+    except Exception as e:  # pragma: no cover - import path depends on runtime
+        logger.error("seed: cannot import hermes_cli.webhook: %s", e)
+        return
+    subs = _load_subscriptions()
+    changed = 0
+    for spec in routes:
+        name = str(spec["name"]).strip().lower().replace(" ", "-")
+        existing = subs.get(name) or {}
+        route = {
+            "description": spec.get("description") or f"Seeded route: {name}",
+            "events": [str(e).strip() for e in (spec.get("events") or [])],
+            "secret": existing.get("secret") or _secrets.token_urlsafe(32),
+            "prompt": spec.get("prompt") or "",
+            "skills": [str(x).strip() for x in (spec.get("skills") or [])],
+            "deliver": _deliver_target(name, spec.get("deliver") or "log"),
+            "created_at": existing.get("created_at") or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+        if spec.get("script"):
+            route["script"] = str(spec["script"]).strip()
+        if spec.get("toolsets"):
+            route["toolsets"] = [str(x).strip() for x in spec["toolsets"]]
+        if spec.get("deliver_only"):
+            route["deliver_only"] = True
+        if {k: v for k, v in existing.items() if k != "created_at"} != {k: v for k, v in route.items() if k != "created_at"}:
+            subs[name] = route
+            changed += 1
+    if changed:
+        _save_subscriptions(subs)
+        logger.info("seed: seeded %d webhook route(s) from webhooks.seed.json", changed)
