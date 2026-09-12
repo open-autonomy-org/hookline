@@ -1,7 +1,7 @@
 ---
 name: develop
-description: Build one board task — its acceptance lines are the whole definition of done — verify it where the project is verified, land it on an agent branch, hand off. No tests for their own sake.
-version: 3.0.0
+description: Build one board task — its acceptance lines are the whole definition of done — verify it where the project is verified, land it on an agent branch, hand off. Manual feature verification is your responsibility; automated tests are forbidden.
+version: 4.4.0
 metadata:
   hermes:
     tags: [open-autonomy, kanban, git]
@@ -12,40 +12,79 @@ metadata:
 # Develop
 
 You work one task from the board. `kanban_show` gives it to you: a title, and acceptance lines in its body.
-Those lines are the whole definition of done. You make every one true in the running system; code existing
+Read its roadmap reference for purpose, scope authority, dependencies, human commitments and release gates.
+A task or compatible constitutional goal does not authorize extra scope; report missing authorization to PM.
+Those lines define the execution handoff; the roadmap outcome can remain open after this task. You make every one true in the running system; code existing
 is not done.
 
 ## The work
 
 1. Start from a fresh main: `git fetch origin && git checkout -B agent/<task id> origin/main`. If you already
    changed files, do this first and carry the changes over.
-2. Read `CONSTITUTION.md` (what the project is and must remain: a task that would break an invariant or enter
+2. Read `ROADMAP.md` and any newer landed changes to your outcome. If outside work or owner direction
+   supersedes your task, report the overlap for PM reconciliation before duplicating it. Read `CONSTITUTION.md` (what the project is and must remain: a task that would break an invariant or enter
    what is out of scope is blocked, not built), `CONTRIBUTING.md` (how code is written here) and `AGENTS.md`.
-   Read the code an acceptance line touches before you write.
-3. Build it. Match `CONTRIBUTING.md`. Write no test unless the acceptance line guards an invariant of the
-   constitution and `bun run check` stays under thirty seconds with it; behavior is verified by running the system,
-   never by a test written for the occasion.
-4. Verify every acceptance line by driving the running system where `AGENTS.md` says it is verified: in the
-   project's own twin world when it keeps one (`world/`), as its operator, one action at a time, reading what
-   comes back; otherwise by running the program itself. You cannot reach production and must not try. Run
-   `bun run check` once, green, before every push.
-5. Commit small, signed as the agent, the task id first in the subject:
+   Read the code an acceptance line touches before you write. Consult accepted architecture decisions in
+   `docs/decisions/`. A material architecture change needs the ADR defined in `CONTRIBUTING.md`, linked
+   from its PR. Draft it with the proposed change; unresolved conflicting decisions hold dependent work.
+3. Build it. Match `CONTRIBUTING.md`. Automated tests are banned: their permanent code and maintenance
+   obligations compound as agents add more, eventually making repository progress impossible. Never write
+   or run automated tests, and never commit test code or a persistent test harness to main. This includes
+   regression tests, even for constitutional invariants.
+4. You are responsible for verifying the feature you add or change through REPL-style manual usage.
+   Drive the running system where `AGENTS.md` says it is verified: in the project's own twin world when
+   configured, otherwise by running the program itself. Use interactive commands or the actual UI, inspect
+   each result, and exercise relevant failure cases. Use disposable synthetic data; write no permanent test
+   code. Inspect command definitions before invoking them; never run automated tests through a check,
+   script or hook. You cannot reach production and must not try. Record what you did, what happened and
+   any unverified acceptance in the handoff. Source review alone does not demonstrate feature behavior.
+5. Before landing, review the final diff against the authorized outcome and every constitutional invariant.
+   An acceptance checklist or green check cannot waive either. Remove accidental scope expansion or block
+   for the needed decision; native reviewers apply the same scope and constitution check to the handoff.
+   Commit small, signed as the agent, the task id first in the subject:
    `git commit -s --author="Open Autonomy agent <agent@open-autonomy.org>" -m "<task id>: <what changed>"`.
-6. Push the branch once, when every acceptance line is true: `git push -u origin agent/<task id>`. The landing
-   merges whatever is pushed, so a push mid-task lands half a feature on main; commit as often as you like, push
-   at the handoff. The landing workflow opens the pull request and merges
-   it when the checks pass. Never wait for it; never open a pull request; never push to `main`; never rewrite
-   history. If the branch exists from an earlier attempt, push to `agent/<task id>-<YYYYMMDD-HHMM>`.
-7. Hand off: `kanban_request_review` naming the branch and the commit, and what is verified how. The handoff is the
-   only way you end a task: you never run `hermes kanban complete`, `reclaim`, `unblock`, `archive` or `edit` on
-   any task, yours included — completing is the review lane's act after it has read your work, and a task you
-   complete yourself was never reviewed. Name no reviewer:
-   the review lane takes the task itself, and a profile the home does not have would hold it forever. This call is
-   how a task ends; a turn that ends without it marks the task done with nothing reviewed, which is never right —
-   even when the work is already on main, hand it off.
+6. Push the completed candidate to agent/<task id>. The landing workflow opens its PR and enables
+   auto-merge; GitHub must require an approving review and dismiss stale approvals when the diff changes.
+   Observe the open PR and record its URL and full head SHA. Pushing opens review, not permission to merge.
+   Do not approve your own work, bypass review or merge as the implementer.
+7. Hand off with `kanban_request_review`: name the PR, workspace, branch and full candidate SHA, then
+   the manual actions and observed results for every acceptance line and any limitations. Leave the
+   workspace intact. Do not name a reviewer; the native lane claims it. Implementers never complete their
+   own task. Requested changes are committed and pushed to the same PR without rewriting history, then
+   manually verified and handed back for review. A changed diff requires fresh approval.
 
-If a line cannot be made true from here, `kanban_block` with exactly what is missing, and stop. Never file,
-split or decompose tasks, and never create one: the board is the owner's. Do not loop on a failure you cannot
+## Native PR review
+
+When dispatched as reviewer, follow sdlc-review with this project's manual-verification policy overriding
+its generic automated-test instructions. Read the PR's actual diff, original task, source authority,
+constitution and manual evidence. Compare the handed-off SHA with the current PR head before reviewing
+and again before submitting the verdict. A changed candidate requires review of the new diff; never
+approve it using evidence for an older commit. Do not edit the implementation while reviewing it.
+For architecture changes, require the linked ADR and independently assess its sources, authorized scope,
+alternatives, consequences and compatibility with the current constitution; cite the relevant clauses in
+the verdict. Verify the code follows the decision and any supersession is explicit. Missing ADRs,
+constitutional conflicts or unresolved competing decisions require changes. Neither an ADR status label
+nor a prior instruction file overrides the constitution; acceptance requires this review and merge.
+
+For correctable defects, submit a GitHub REQUEST_CHANGES review and use `kanban_request_changes` with
+concrete findings. For approval, submit a GitHub APPROVE review through the project's configured GitHub
+door, explicitly setting commit_id to the reviewed full SHA and recording the manual evidence. A native
+approval comment alone does not satisfy GitHub's merge gate. Do not use the PR author's identity to
+approve its own PR, disable protection or claim permission failures are approval. Setup verifies that the
+project's reviewer identity can approve PRs opened by the landing workflow's distinct GitHub Actions identity.
+
+Observe the merge through GitHub and fetched origin/main, then `kanban_complete` with the PR, reviewed
+SHA and landed evidence. A pending or failed merge is not completion: retain the approval evidence and
+report the concrete blocker. Resume the unchanged approved PR without repeating completed verification.
+Human release approval remains separate. Older already-merged work still needs honest execution review;
+never claim it had pre-merge approval or reopen it simply to manufacture that history.
+
+If a line cannot be made true from here, `kanban_block` with exactly what is missing, and stop. For a human
+decision use `kind: "needs_input"`; for a permission you cannot obtain use `kind: "capability"`. State the
+ask as an action: the exact command, page or secret name, and how the owner releases the task afterward.
+Never include a secret value. PM reviews these blocks and contacts the human using the project's agreed communication practices.
+Never file,
+split or decompose implementation tasks: send discovered work and source evidence to the PM scrum. Do not loop on a failure you cannot
 explain.
 
 ## When an acceptance line needs a purchase
@@ -75,5 +114,4 @@ conversation. From the terminal the CLI needs its home and its path named in ful
 
 ## Cost
 
-Every model call is metered to the project and public. Read before you write, run the check once, stop when
-verified.
+Every model call is metered to the project and public. Read before you write, manually verify the feature, and stop when verified.
