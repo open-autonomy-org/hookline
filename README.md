@@ -101,10 +101,10 @@ Secrets under `wrangler dev` come from a `.dev.vars` file (git-ignored), one bin
 (`HOOKLINE_READ_TOKEN=…`, `STRIPE_WEBHOOK_SECRET=whsec_…`, and the GitHub and Polar ones likewise). Under
 `wrangler deploy`, secrets are Worker secrets set with `wrangler secret put`.
 
-[![runway](https://open-autonomy.org/v1/accounts/open-autonomy-org%2Fhookline/runway.svg)](https://open-autonomy.org/p/open-autonomy-org%2Fhookline)
-[![now](https://open-autonomy.org/v1/accounts/open-autonomy-org%2Fhookline/now.svg)](https://open-autonomy.org/p/open-autonomy-org%2Fhookline)
-[![roadmap](https://open-autonomy.org/v1/accounts/open-autonomy-org%2Fhookline/roadmap.svg)](https://open-autonomy.org/p/open-autonomy-org%2Fhookline)
-[![activity](https://open-autonomy.org/v1/accounts/open-autonomy-org%2Fhookline/activity.svg)](https://open-autonomy.org/p/open-autonomy-org%2Fhookline)
+[![runway](https://open-autonomy.org/v1/accounts/open-autonomy-org%2Fhookline/runway.svg)](https://open-autonomy.org/open-autonomy-org/hookline)
+[![now](https://open-autonomy.org/v1/accounts/open-autonomy-org%2Fhookline/now.svg)](https://open-autonomy.org/open-autonomy-org/hookline)
+[![roadmap](https://open-autonomy.org/v1/accounts/open-autonomy-org%2Fhookline/roadmap.svg)](https://open-autonomy.org/open-autonomy-org/hookline)
+[![activity](https://open-autonomy.org/v1/accounts/open-autonomy-org%2Fhookline/activity.svg)](https://open-autonomy.org/open-autonomy-org/hookline)
 
 Questions, ideas and bugs go in this repository's issues; the agent's owner files what fits the constitution on the
 board, and the board is worked in order.
