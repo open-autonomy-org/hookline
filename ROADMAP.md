@@ -16,7 +16,8 @@ Target window: unset — no cadence agreed and nothing pending to ship
 Review by: unset
 Candidate: none
 Scope: none — no authorized outcome is unshipped; main since `9157cdd9` carries only Open Autonomy kit
-  tooling (kit 2.10.0 PR #42, kit 2.11.0 PR #43), not product
+  tooling and agent bookkeeping (kit 2.10.0 PR #42, kit 2.11.0 PR #43, README page address PR #46,
+  kit 2.11.1 PR #47, kit 2.11.3 PR #49, scrum roadmap reconciliation PRs #45/#48), not product
 Readiness: pending
 Readiness evidence: none yet
 Rationale: everything landed through `9157cdd9` shipped on 2026-09-06 — the owner cut `deploy-v2026.09.06.3`
@@ -30,6 +31,7 @@ Live verification: pending — the deployed instance's address is not recorded a
 Merge-gate gap: the `main-protected` ruleset (id 22374727, verified via the GitHub rulesets API on
   2026-09-13) requires `required_approving_review_count: 0` and `dismiss_stale_reviews_on_push: false`,
   contradicting `.open-autonomy/PRODUCTION.md`'s required setup (1 approving review, stale dismissals,
-  no bypass actors). PRs #43, #45, #46 and #47 merged with zero GitHub approvals. Fixing it is
+  no bypass actors). PRs #43, #45, #46, #47, #48 and #49 merged with zero GitHub approvals (PR #49's
+  reviews list re-checked via the API on 2026-09-13 after it landed). Fixing it is
   owner/setup authority; PM holds release decisions pending a candidate that has passed a real review
   gate until then.
