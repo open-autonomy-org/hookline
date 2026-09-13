@@ -27,3 +27,9 @@ Version rationale: releases are the owner's `deploy-v<date>[.n]` tags on the pro
   package version or GitHub-release policy exists.
 Live verification: pending — the deployed instance's address is not recorded anywhere the agent can read,
   so post-release verification of the live service has no source yet.
+Merge-gate gap: the `main-protected` ruleset (id 22374727, verified via the GitHub rulesets API on
+  2026-09-13) requires `required_approving_review_count: 0` and `dismiss_stale_reviews_on_push: false`,
+  contradicting `.open-autonomy/PRODUCTION.md`'s required setup (1 approving review, stale dismissals,
+  no bypass actors). PRs #43, #45, #46 and #47 merged with zero GitHub approvals. Fixing it is
+  owner/setup authority; PM holds release decisions pending a candidate that has passed a real review
+  gate until then.
