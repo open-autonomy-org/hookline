@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
 import { SupercodeHarnessClient, type SessionDescriptor, type HarnessRun } from '@volter-ai-dev/supercode-harness-sdk';
 import { ROADMAP_SCHEMA, linkOf, linksIn, type Link, type RoadmapItem } from './sdk/roadmap.ts';
-import { OpenAutonomy } from './sdk/client.ts';
+import { OpenAutonomy, Session } from './sdk/client.ts';
 import { publicationPolicy, publishes, TranscriptPublisher, type PublicationCheckpoint, type RecordedCompletion } from './reporting.ts';
 
 const arg = (name: string): string | undefined => { const i = process.argv.indexOf(name); return i >= 0 ? process.argv[i + 1] : undefined; };
@@ -72,13 +72,28 @@ function completionOf(d: SessionDescriptor): RecordedCompletion | undefined {
   // A session's native end is authoritative even when its old cron fire has left
   // the bounded native run ledger. An absent outcome stays absent.
   const binding = bindings.get(d.locator.session_id);
-  return binding?.ended_at ? { endedAt: binding.ended_at, outcome: binding.end_reason === 'error' ? 'failed' : undefined } : undefined;
+  if (binding?.ended_at) return { endedAt: binding.ended_at, outcome: binding.end_reason === 'error' ? 'failed' : undefined };
+  // A session Hermes never closed (its process killed under it) has no native end and never will. Not proven
+  // running by the host and silent for six hours, it ended when it last spoke; an absent outcome stays absent.
+  if (!d.live_status && d.updated_at_ms && Date.now() - d.updated_at_ms > 6 * 3600_000) return { endedAt: new Date(d.updated_at_ms).toISOString() };
+  return undefined;
 }
+// Native state is a second or two of the host's disk per read, and a tick comes every five seconds and on every
+// session event: read it at most every thirty seconds, or right after a failed read, and a session's end is
+// still noticed within that. A read is given a minute, and one retry when Hermes's own atomic rewrite of a file
+// leaves a name missing for an instant.
+let nativeAt = 0, nativeOk = false;
 async function nativeState(): Promise<void> {
-  const [orchestration, history] = await Promise.all([
-    sc.orchestrationLoad({ root: home, flavor: 'hermes' }),
-    sc.listRuns({ harness: 'hermes', homes, limit: 500 }),
+  if (nativeOk && Date.now() - nativeAt < 30_000) return;
+  nativeOk = false;
+  const read = () => Promise.all([
+    sc.orchestrationLoad({ root: home, flavor: 'hermes' }, { timeoutMs: 60_000 }),
+    sc.listRuns({ harness: 'hermes', homes, limit: 500 }, { timeoutMs: 60_000 }),
   ]);
+  let result: Awaited<ReturnType<typeof read>>;
+  try { result = await read(); }
+  catch (e) { if (!/No such file or directory/.test((e as Error).message)) throw e; await Bun.sleep(300); result = await read(); }
+  const [orchestration, history] = result;
   if (history.sources.some(s => s.state === 'unreadable')) throw new Error('Native run ledger unreadable');
   const next = orchestration.orchestration.profiles as Record<string, Profile>;
   if (!next || !next.default) throw new Error('Native profile state unavailable');
@@ -87,6 +102,7 @@ async function nativeState(): Promise<void> {
   runs = new Map(history.runs.filter(r => r.session_id).map(r => [r.session_id!, r]));
   jobNames.clear();
   for (const profile of Object.values(profiles)) for (const [id, job] of Object.entries(profile.jobs)) jobNames.set(id, job.residue?.name ?? id);
+  nativeAt = Date.now(); nativeOk = true;
 }
 async function watch(d: SessionDescriptor): Promise<void> {
   const key = d.locator.session_id;
@@ -364,7 +380,29 @@ async function control(): Promise<void> {
   const digest = `${state}|${note ?? ''}`;
   if (digest !== reportedState && (await oa.reportState(state, note)).ok) { reportedState = digest; log(`operating state ${state}${note ? ` (${note})` : ''}`); }
 }
-let busy = false, dirty = false, quitting = false, documentsAt = 0;
+let busy = false, dirty = false, quitting = false, documentsAt = 0, orphansAt = 0;
+// A session the platform holds as live whose native record is gone (a run killed with its host, a store pruned)
+// would stay live forever: nothing narrates its end. Absent from discovery for five minutes, it ended: the reporter
+// says so at the platform's last turn of it, with no outcome, since none was recorded.
+const missingSince = new Map<string, number>();
+async function orphans(): Promise<void> {
+  const { live } = await oa.sessions(cfg.account, 200);
+  for (const key of live) {
+    if (descriptors.has(key) || stopped.has(key)) { missingSince.delete(key); continue; }
+    const since = missingSince.get(key) ?? Date.now();
+    missingSince.set(key, since);
+    if (Date.now() - since < 5 * 60_000) continue;
+    try {
+      const remote = await oa.session(cfg.account, key);
+      if (!remote || remote.status !== 'live') { stopped.add(key); continue; }
+      const endedAt = remote.turns.at(-1)?.ts ?? remote.started_at;
+      await new Session(oa, key, remote.next_seq).end({ endedAt });
+      if (checkpoints[key]) { checkpoints[key].endedAt = endedAt; saveState(); }
+      stopped.add(key); missingSince.delete(key);
+      log(`${key}: native record gone; ended at its last turn`);
+    } catch (e) { log(`${key}: orphan not ended (${(e as Error).message})`); }
+  }
+}
 async function tick(): Promise<void> {
   if (busy || quitting) { dirty = true; return; }
   busy = true;
@@ -374,6 +412,7 @@ async function tick(): Promise<void> {
       await nativeState();
       const present = await board();
       await sessions();
+      if (Date.now() - orphansAt > 60_000) { await orphans(); orphansAt = Date.now(); }
       if (Date.now() - controlAt > 10_000) { await control(); controlAt = Date.now(); }
       if (Date.now() - documentsAt > 60_000) {
         refreshMain();

@@ -1,6 +1,6 @@
 {
   "kit": "hermes",
-  "version": "2.11.1",
+  "version": "2.11.3",
   "params": {
     "project": "hookline",
     "account": "open-autonomy-org/hookline"
