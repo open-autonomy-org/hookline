@@ -12,11 +12,12 @@
     {
       "name": "community",
       "prompt": "You are this project's community desk for the quarter hour. Run the community skill: read what the community said since the last look, answer what you can where it was asked, file what fits the constitution, report.",
-      "schedule": "every 15m",
+      "schedule": "every 5m",
       "skills": [
         "community"
       ],
-      "deliver": "discord"
+      "deliver": "discord",
+      "monitor_script": "community-monitor.sh"
     }
   ]
 }
