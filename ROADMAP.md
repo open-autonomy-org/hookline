@@ -1,87 +1,29 @@
 # hookline roadmap
 
-Notable intentions maintained by the Hermes PM scrum. Imported historical intentions await reconciliation; existing tasks, owners and holds remain intact.
+Notable intentions maintained by the Hermes PM scrum. Reconciled at scrum `5ff01a76` (main `c3715c6a`)
+against landed history and the live board: every founding seed outcome — `receive`, `forward`, `stripe`,
+`github-polar`, `replay`, `listen`, `deploy` — has a completed board task, landed commits, acceptance proven
+in the project's world, and ships inside the owner's `deploy-v2026.09.06.3` tag. The seed import is retired;
+the landed record lives in CHANGELOG.md. New outcomes wait on owner direction; an empty roadmap is not
+permission to invent work.
 
-## receive: Every webhook is received and kept
+## release-next: The next release of the reference inbox
 
-Status: historical intention; reconcile with the live board and landed work.
 Dispatch: hold
-
-Source: [committed seed](hermes/kanban.seed.json), key `receive`. This is not evidence of current priority or completion.
-
-Completion:
-- `POST /in/<source>` with any body stores an event in the inbox's Durable Object before anything else: an id, the source, the time, every request header, and the raw body byte for byte; then answers 200 with the id. Nothing about the body is parsed or assumed.
-- `GET /events` lists events newest first (id, source, time, size) and `GET /events/<id>` returns one with its headers and raw body.
-- Proven in the world: a POST from the Stripe twin's webhook delivery lands as an event whose raw body matches what the twin's ledger says it sent.
-
-## forward: Events are forwarded to a target with retries, every attempt recorded
-
-Status: historical intention; reconcile with the live board and landed work.
-Dispatch: hold
-
-Source: [committed seed](hermes/kanban.seed.json), key `forward`. This is not evidence of current priority or completion.
-
-Completion:
-- `PUT /targets/<name>` with a URL attaches a target; `GET /targets` lists them. Every stored event is delivered to every target as a POST with the original headers (prefixed `X-Hookline-Original-`), `X-Hookline-Event`, and the raw body.
-- A delivery is acknowledged by any 2xx; anything else is retried with backoff (1s, 5s, 30s, 2m, 10m, 1h, then hourly for a day) and every attempt is recorded on the event: time, target, status, error.
-- Proven in the world: with the target answering at `/fail` the attempts accrue and are listed; with the target answering at `/ok` the same event is delivered exactly once.
-
-## stripe: Stripe's signature is verified and shown
-
-Status: historical intention; reconcile with the live board and landed work.
-Dispatch: hold
-
-Source: [committed seed](hermes/kanban.seed.json), key `stripe`. This is not evidence of current priority or completion.
-
-Completion:
-- An event from `/in/stripe` is verified with Stripe's scheme (`Stripe-Signature`, `t=`/`v1=`, HMAC-SHA256 over `t.body`, a tolerance window) against `STRIPE_WEBHOOK_SECRET` from the Worker's bindings; the event records `verified: true|false` and why.
-- Verification never blocks storage: an unverified event is kept and marked, never dropped.
-- Proven in the world against the Stripe twin: an endpoint enrolled on the twin, an event driven through its test helpers arrives verified; the same body with a wrong secret arrives unverified.
-
-## github-polar: GitHub's and Polar's signatures are verified likewise
-
-Status: historical intention; reconcile with the live board and landed work.
-Dispatch: hold
-
-Source: [committed seed](hermes/kanban.seed.json), key `github-polar`. This is not evidence of current priority or completion.
-
-Completion:
-- `/in/github` verifies `X-Hub-Signature-256` (HMAC-SHA256 hex over the body) against `GITHUB_WEBHOOK_SECRET`; `/in/polar` verifies the Standard Webhooks scheme (`webhook-id`, `webhook-timestamp`, `webhook-signature` v1 base64 HMAC-SHA256 over `id.timestamp.body`) against `POLAR_WEBHOOK_SECRET`.
-- Proven in the world against the GitHub twin's repository webhooks and events signed the way Polar signs them.
-
-## replay: Any event replays to any target, recorded as a replay
-
-Status: historical intention; reconcile with the live board and landed work.
-Dispatch: hold
-
-Source: [committed seed](hermes/kanban.seed.json), key `replay`. This is not evidence of current priority or completion.
-
-Completion:
-- `POST /events/<id>/replay` with a target name delivers that event to that target again, recorded as a replay attempt distinct from the original deliveries; `POST /targets/<name>/replay` with a range (from an event id, or since a time) replays them in order.
-- Proven in the world: a replayed event reaches the target's `/received` again with `X-Hookline-Replay: true`, and the event's record shows the replay.
-
-## listen: A laptop is a target: hookline listen, over a socket, with a cursor
-
-Status: historical intention; reconcile with the live board and landed work.
-Dispatch: hold
-
-Source: [committed seed](hermes/kanban.seed.json), key `listen`. This is not evidence of current priority or completion.
-
-Completion:
-- `bun src/cli.ts listen --inbox <url> --to http://localhost:3000` connects out to the inbox over a websocket as a named target; the inbox delivers events down the socket in order from the target's cursor, the CLI posts each to the local URL, and acknowledges it back; the cursor advances only on acknowledgement.
-- Closing the CLI queues events; reopening it delivers what was missed, in order, exactly once. No inbound port on the laptop.
-- Proven in the world: the CLI attached to a local target, events driven from the twins, the target's `/received` complete and in order across a disconnect.
-
-## deploy: Deploy in a minute: the README's path is true
-
-Status: historical intention; reconcile with the live board and landed work.
-Dispatch: hold
-
-Source: [committed seed](hermes/kanban.seed.json), key `deploy`. This is not evidence of current priority or completion.
-
-Completion:
-- README.md walks from clone to `bunx wrangler deploy` to a vendor pointed at the inbox's address to the first event on `/events`, with the secrets set through `wrangler secret put`; every command in it is the one that works.
-- The Worker's UI at `/` shows the events, their verification, their deliveries and replay, without a build step.
-- A reader who follows the README with a fresh clone reaches the first event; the Worker's page says what version it runs.
-
-PM must reconcile this import against landed history and the live board before dispatch. Distill notable landed changes into CHANGELOG.md; retain outstanding release and verification outcomes here. Routine activity stays in source history.
+Release decision: accumulate
+Target version: deploy-v<date>[.n] — the owner-cut tag names the release, per the project's observed policy
+Target window: unset — no cadence agreed and nothing pending to ship
+Review by: unset
+Candidate: none
+Scope: none — no authorized outcome is unshipped; main since `9157cdd9` carries only Open Autonomy kit
+  tooling (kit 2.10.0 PR #42, kit 2.11.0 PR #43), not product
+Readiness: pending
+Readiness evidence: none yet
+Rationale: everything landed through `9157cdd9` shipped on 2026-09-06 — the owner cut `deploy-v2026.09.06.3`
+  (commit `9157cdd9`) and the deploy run succeeded
+  (https://github.com/open-autonomy-org/hookline/actions/runs/34065618527). A new decision is due when
+  owner-authorized outcomes land.
+Version rationale: releases are the owner's `deploy-v<date>[.n]` tags on the production environment; no
+  package version or GitHub-release policy exists.
+Live verification: pending — the deployed instance's address is not recorded anywhere the agent can read,
+  so post-release verification of the live service has no source yet.
