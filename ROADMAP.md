@@ -16,7 +16,7 @@ Target window: unset — no cadence agreed and nothing pending to ship
 Review by: unset
 Candidate: none
 Scope: none — no authorized outcome is unshipped; main since `9157cdd9` carries only Open Autonomy kit
-  tooling (kit 2.10.0, PR #42), not product
+  tooling (kit 2.10.0 PR #42, kit 2.11.0 PR #43), not product
 Readiness: pending
 Readiness evidence: none yet
 Rationale: everything landed through `9157cdd9` shipped on 2026-09-06 — the owner cut `deploy-v2026.09.06.3`
