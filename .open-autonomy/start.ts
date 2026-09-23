@@ -4,6 +4,7 @@
 // stack; legacy --as privilege dropping remains available for existing installations.
 //
 //   bun .open-autonomy/start.ts [--home <dir>] [--secrets <dir>] [--project <dir>] [--origin <url>] [--as <user>] [--valve <port>]
+//   bun .open-autonomy/start.ts --fleet <fleet.json> [--valve <port>]     several projects together (fleet.ts)
 //
 // <secrets>/github-app.json, when present, is the agent's own GitHub identity for its community desk (a GitHub App
 // installed on the repository: app_id, installation_id, repository, private_key): the valve serves it on the fourth
@@ -28,15 +29,21 @@
 //   gateway     `hermes gateway run` in the checkout, HERMES_HOME=<home>
 // When any of them ends, all of them end and this exits 1: the supervisor outside (you, launchd, Docker) restarts.
 import { codexAccess } from './codex-auth.ts';
+import { agentModels, applyAgent, parseAgent, readAgent, type Setup } from './agent.ts';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { constants, hostname, tmpdir } from 'node:os';
 import { homedir, userInfo } from 'node:os';
-import { basename, resolve } from 'node:path';
+import { basename, relative, resolve } from 'node:path';
 
 const argv = process.argv.slice(2);
 const arg = (name: string): string | undefined => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : undefined; };
 // A managed executor keeps credentials, reporting and supervision on this host.
 // The bare entrypoint below remains the development/rehearsal path.
+if (arg('--fleet')) {
+  const { startFleet } = await import('./fleet.ts');
+  const runtime = await startFleet({ definition: resolve(arg('--fleet')!), port: Number(arg('--valve') ?? 8787), secretsRoot: arg('--secrets-root'), stateRoot: arg('--state-root') });
+  process.exit(await runtime.exited);
+}
 if (arg('--container')) {
   const { startContainer } = await import('./container.ts');
   const runtime = await startContainer({ container: arg('--container')!, project: arg('--project'),
@@ -196,6 +203,15 @@ if (readFileSync(resolve(project, '.open-autonomy/start.ts'), 'utf8') !== loaded
   process.exit(75);
 }
 
+// The agent's setup (docs/decisions/0007): .open-autonomy/agent.json, from the same revision the home comes from.
+// A project still carrying hermes/config.yaml has not taken the upgrade that derives it.
+const agentSetup: Setup | null = (() => {
+  if (!committedFrom) return readAgent(project);
+  const shown = Bun.spawnSync({ cmd: drop(['git', 'show', 'origin/main:.open-autonomy/agent.json']), cwd: project, env: agentEnv(), stdout: 'pipe', stderr: 'pipe' });
+  return shown.exitCode === 0 ? parseAgent(shown.stdout.toString(), 'origin/main:.open-autonomy/agent.json') : null;
+})();
+if (!agentSetup) { console.error('start: no .open-autonomy/agent.json; run `create-open-autonomy upgrade` to derive it from hermes/config.yaml (docs/decisions/0007). No services were started.'); process.exit(1); }
+
 // 3. The home, from the repository: everything under hermes/ except its .env, which is the home's own.
 const committed = committedFrom ?? resolve(project, 'hermes');
 if (existsSync(committed)) {
@@ -206,22 +222,25 @@ if (existsSync(committed)) {
 }
 // The home's .env is the home's own, except the valve's three lines, which are this start's truth on every start.
 const envFile = resolve(home, '.env');
-const githubApp = existsSync(resolve(secrets, 'github-app.json'));
+// The agent's GitHub identities: one record per port, from the fourth. <secrets>/github-app.json is the only place
+// this start finds a record today; the valve takes one --github-app per record, so several serve side by side.
+const githubRecords: Array<{ file: string; port: number }> = existsSync(resolve(secrets, 'github-app.json')) ? [{ file: resolve(secrets, 'github-app.json'), port: valvePort + 3 }] : [];
+const githubApp = githubRecords.length > 0;
 const managed = githubApp ? /^(OPEN_AUTONOMY_(BASE_URL|PAY_URL|KEY)|HERMES_CODEX_BASE_URL|GITHUB_API_URL|GITHUB_TOKEN)=/ : /^(OPEN_AUTONOMY_(BASE_URL|PAY_URL|KEY)|HERMES_CODEX_BASE_URL)=/;
 const kept = existsSync(envFile) ? readFileSync(envFile, 'utf8').split('\n').filter((l) => l.trim() && !managed.test(l)) : [];
 // Keep the host login environment for the valve; only the agent gets an empty Codex home.
 const hostEnvironment = inherited();
-const onCodex = ['config.yaml', 'profiles/treasurer/config.yaml'].some((f) => existsSync(resolve(home, f)) && /^\s+provider:\s*openai-codex\s*$/m.test(readFileSync(resolve(home, f), 'utf8')));
+const onCodex = agentModels(agentSetup).some((m) => m.provider === 'openai-codex');
 const codexPort = valvePort + 2;
 const codexTwin = process.env.HERMES_CODEX_BASE_URL?.trim();
 const codexForward = codexTwin || (onCodex ? `http://127.0.0.1:${codexPort}/backend-api/codex` : undefined);
 if (onCodex && !codexTwin) await codexAccess();
 // A home that still routes its model through a custom provider at HERMES_CODEX_BASE_URL gets no valve and no
 // address: every run would fail on a connection error, silently. Say so where the operator reads.
-if (!onCodex && !codexTwin && ['config.yaml', 'profiles/treasurer/config.yaml'].some((f) => existsSync(resolve(home, f)) && readFileSync(resolve(home, f), 'utf8').includes('HERMES_CODEX_BASE_URL'))) console.error('start: the model config expects the Codex valve (HERMES_CODEX_BASE_URL) but names no openai-codex provider; set `model.provider: openai-codex` and drop the custom provider, or every run fails to connect');
+if (!onCodex && !codexTwin && JSON.stringify(agentSetup).includes('HERMES_CODEX_BASE_URL')) console.error('start: the model config expects the Codex valve (HERMES_CODEX_BASE_URL) but names no openai-codex provider; give the named model provider openai-codex in .open-autonomy/agent.json and drop the custom provider, or every run fails to connect');
 const codexBase = codexForward ? [`HERMES_CODEX_BASE_URL=${codexForward}`] : [];
 // The desk's GitHub door likewise: the valve's fourth port, as api.github.com.
-const githubDoor = githubApp ? [`GITHUB_API_URL=http://127.0.0.1:${valvePort + 3}`, 'GITHUB_TOKEN=valve'] : [];
+const githubDoor = githubRecords.length ? [`GITHUB_API_URL=http://127.0.0.1:${githubRecords[0].port}`, 'GITHUB_TOKEN=valve'] : [];
 const lines = [`OPEN_AUTONOMY_BASE_URL=${baseUrl}`, `OPEN_AUTONOMY_PAY_URL=${payUrl}`, 'OPEN_AUTONOMY_KEY=valve', ...codexBase, ...githubDoor, ...kept];
 // The agent's channels: <secrets>/channels.env (the setup writes it: the Discord bot and its channel; an engagement
 // adds its Slack bot, its webhook platform, whatever it speaks) is this start's truth for every line it holds — a
@@ -269,19 +288,21 @@ const keys: string[] = ['--key', `${developerKey}:${valvePort}`];
 if (existsSync(resolve(secrets, 'treasurer.env'))) keys.push('--key', `${resolve(secrets, 'treasurer.env')}:${valvePort + 1}`);
 // Both launch modes use the host Codex login. A model twin never starts real authentication.
 if (onCodex && !codexTwin) keys.push('--codex', String(codexPort));
-// The agent's GitHub identity: the valve mints the app's installation tokens and serves the desk's routes on the fourth port.
-const githubFile = resolve(secrets, 'github-app.json');
-if (githubApp) keys.push('--github-app', `${githubFile}:${valvePort + 3}`);
+// The agent's GitHub identities: the valve mints each app's own installation tokens and serves its desk's routes on its own port.
+for (const record of githubRecords) keys.push('--github-app', `${record.file}:${record.port}`);
 spawn('valve', ['bun', resolve(import.meta.dir, 'valve.ts'), '--loopback', ...keys], { env: hostEnvironment });
 
 // 5. The reporter and the gateway, as the agent. The reporter's own dependencies (supercode, beside it in
 //    .open-autonomy/package.json) are installed when that file is not the one the last complete install satisfied:
 //    a stamp beside them names it, and a failed install leaves none, so node_modules alone is no evidence. (The
-//    lockfile is not the identity: a clone carries none, the kit ignores it.) An install that is already complete
+//    lockfile is not the identity: a clone may carry none.) An install that is already complete
 //    costs no registry call, which a sealed world could not make.
 const env = agentEnv();
 {
-  const lock = ['bun.lock', 'bun.lockb'].map((file) => resolve(import.meta.dir, file)).find(existsSync);
+  // A committed lock pins the install (frozen); one git does not track (ignored, or left by an older install) is
+  // this host's scratch, and the install brings it up to package.json instead of refusing on it.
+  const committed = (file: string) => Bun.spawnSync({ cmd: drop(['git', 'ls-files', '--error-unmatch', relative(project, file)]), cwd: project, env, stdout: 'ignore', stderr: 'ignore' }).exitCode === 0;
+  const lock = ['bun.lock', 'bun.lockb'].map((file) => resolve(import.meta.dir, file)).find((file) => existsSync(file) && committed(file));
   const stamp = resolve(import.meta.dir, 'node_modules', '.open-autonomy-install');
   const want = String(Bun.hash(readFileSync(resolve(import.meta.dir, 'package.json'))));
   if ((existsSync(stamp) ? readFileSync(stamp, 'utf8').trim() : '') !== want) {
@@ -290,6 +311,19 @@ const env = agentEnv();
     writeFileSync(stamp, `${want}\n`);
     say(`reporter dependencies installed in ${import.meta.dir}`);
   }
+}
+// 6. The agent's setup into its home, before anything runs there: each profile's model, settings and jobs, through
+//    Hermes's own functions (Supercode's applier), owned by their Hermes ids against a base beside the home. A setup
+//    that cannot be applied stops the start: a gateway on an unrendered home would run on Hermes's default model.
+try {
+  const lines = await applyAgent({
+    setup: agentSetup, homeOf: (profile) => (profile === 'default' ? home : resolve(home, 'profiles', profile)),
+    homeId: account ?? basename(project), stateRoot: resolve(home, '..', 'apply'), workspace: project, asAgent: user ? drop([]) : [],
+  });
+  for (const line of lines) say(`agent: ${line}`);
+} catch (error) {
+  console.error(`start: the agent's setup could not be applied: ${(error as Error).message}. No gateway was started.`);
+  process.exit(1);
 }
 // What runs the agent, for its page: bare on this host, and which kit. Never a credential.
 const runtimeFacts = JSON.stringify({ mode: 'bare', kit: (() => { try { return JSON.parse(readFileSync(resolve(import.meta.dir, 'kit.json'), 'utf8')).version; } catch { return undefined; } })(), host: hostname() });
@@ -335,6 +369,6 @@ setInterval(() => {
   // releases. Use the host's signal constant: SIGUSR1 is 30 on macOS, 10 on Linux.
   process.kill(gateway.pid, constants.signals.SIGUSR1);
 }, 5000);
-say(`gateway up in ${project} as ${user?.name ?? userInfo().username}, home ${home}; the valve on :${valvePort}${existsSync(resolve(secrets, 'treasurer.env')) ? ` and :${valvePort + 1}` : ''}${codexForward ? `; the Codex subscription through ${codexForward}` : ''}${githubApp ? `; the GitHub App on :${valvePort + 3}` : ''}`);
+say(`gateway up in ${project} as ${user?.name ?? userInfo().username}, home ${home}; the valve on :${valvePort}${existsSync(resolve(secrets, 'treasurer.env')) ? ` and :${valvePort + 1}` : ''}${codexForward ? `; the Codex subscription through ${codexForward}` : ''}${githubRecords.length ? `; the GitHub App on ${githubRecords.map((r) => `:${r.port}`).join(' and ')}` : ''}`);
 if (!readFileSync(resolve(project, '.open-autonomy', 'config.yaml'), 'utf8').includes('account:')) say('warning: .open-autonomy/config.yaml names no account');
 await new Promise(() => {});
