@@ -140,8 +140,7 @@ On migration, match imported historical seed keys/titles to actual board tasks a
 A template seed is not a user request; establish scope authority before making an imported intention ready. Retain
 owners, holds and acceptance; don't recreate work. Existing project-owned roadmap/changelog are preserved
 by kit upgrades. Correct stale project instructions in a planning PR when warranted, but never rewrite the
-constitution. If it still reserves all task creation to the owner, request a concrete owner amendment and
-hold new dispatch; continue coordinating existing authorized work.
+constitution.
 
 The repo builds itself by default. A human executor requires evidence of an explicit "I'll do it" or other
 accepted commitment. A request or silence is not acceptance. Acknowledge scope in the existing conversation,
@@ -282,7 +281,9 @@ execution. PM coordinates; it doesn't implement.
   still verifies execution acceptance. Unknown status completes nothing.
 - Review human-input blocks and follow up using the `project-communications` skill. Record the conversation
   link in the native task so the next scrum can check for a reply. Volunteer commitments follow their agreed follow-ups.
-- Run `bun .open-autonomy/maintain.ts upgrade`, then `restart` for idle kit maintenance. Every upgrade PR,
+- Run `bun .open-autonomy/maintain.ts upgrade`, then `restart` for idle kit maintenance. The upgrade merges the
+  kit's change into this project's files three-way; a file where both moved is left with conflict markers in
+  the upgrade worktree for you to resolve, keeping this project's intent and the kit's change. Every upgrade PR,
   including workflow changes, goes through independent exact-head agent review and automatic merge.
   The supervisor drains and restarts after landing. Human approval is reserved for release of the exact candidate.
 
