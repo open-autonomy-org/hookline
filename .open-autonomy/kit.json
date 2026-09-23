@@ -1,9 +1,9 @@
 {
   "kit": "hermes",
-  "version": "2.11.18",
+  "skew": "self-build",
+  "version": "3.2.0",
   "params": {
     "project": "hookline",
     "account": "open-autonomy-org/hookline"
-  },
-  "divergences": []
+  }
 }
