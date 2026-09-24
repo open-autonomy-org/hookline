@@ -8,11 +8,8 @@
       "inference": {
         "models": {
           "project": {
-            "provider": "custom",
-            "model": "zai/glm-5.3-flash",
-            "endpoint": "OPEN_AUTONOMY_BASE_URL",
-            "credential": "OPEN_AUTONOMY_KEY",
-            "api_mode": "chat_completions"
+            "provider": "openai-codex",
+            "model": "gpt-5.6-sol"
           }
         },
         "default": "project",
@@ -71,11 +68,8 @@
       "inference": {
         "models": {
           "project": {
-            "provider": "custom",
-            "model": "zai/glm-5.3-flash",
-            "endpoint": "OPEN_AUTONOMY_PAY_URL",
-            "placeholder_key": "valve",
-            "api_mode": "chat_completions"
+            "provider": "openai-codex",
+            "model": "gpt-5.6-sol"
           }
         },
         "default": "project",
@@ -98,5 +92,5 @@
       }
     }
   },
-  "harness": "claude-code"
+  "harness": "codex"
 }
