@@ -9,7 +9,7 @@ import { codexAccess } from './codex-auth.ts';
 import { checkCredentialDirectory } from './credentials.ts';
 import { startContainerProcess } from './container-process.ts';
 import { mergeImageDenylist, prepareContainerHome, prepareContainerSubscription, writeContainerEnvironment, writeContainerKitRecord } from './container-home.ts';
-import { agentModels, applyAgent, parseAgent } from './agent.ts';
+import { agentHarness, agentModels, applyAgent, parseAgent } from './agent.ts';
 
 export async function startContainer(options: {
   container: string; project?: string; home?: string; secrets?: string; state?: string; config?: string; port: number;
@@ -48,7 +48,12 @@ export async function startContainer(options: {
   const own = (name: string, cmd: string[], extra: { env?: Record<string, string | undefined>; ipc?: (message: any) => void } = {}) => {
     const proc = Bun.spawn({ cmd, stdin: 'ignore', stdout: 'inherit', stderr: 'inherit', ...extra });
     services.push(proc);
-    void proc.exited.then(code => { if (!ending) { console.error(`host: ${name} ended (${code})`); void stop(1); } });
+    void proc.exited.then(code => {
+      if (ending) return;
+      // The reporter narrates; it never decides whether the brain runs. It comes back in ten seconds.
+      if (name === 'reporter') { console.error(`host: reporter ended (${code}); the brain keeps running, the reporter returns in 10 s`); setTimeout(() => { if (!ending) own(name, cmd, extra); }, 10_000); return; }
+      console.error(`host: ${name} ended (${code})`); void stop(1);
+    });
   };
   const ready = async (check: () => Promise<boolean>, name: string) => {
     const deadline = Date.now() + 30_000;
@@ -73,6 +78,8 @@ export async function startContainer(options: {
     if ((Bun.YAML.parse(prepared.config) as any)?.account !== account) throw new Error('Committed configuration names another project');
     if (!prepared.agent) throw new Error('No .open-autonomy/agent.json at the committed revision; run `create-open-autonomy upgrade` (docs/decisions/0007)');
     const agentSetup = parseAgent(prepared.agent, 'origin/main:.open-autonomy/agent.json');
+    // the executor runs Hermes; another harness runs on Supercode's orchestrator, bare (ADR 0007, as amended)
+    if (agentHarness(agentSetup) !== 'hermes') throw new Error(`.open-autonomy/agent.json picks ${agentHarness(agentSetup)}, which runs on Supercode's orchestrator; container mode runs Hermes only, so start it bare`);
     const onCodex = agentModels(agentSetup).some(model => model?.provider === 'openai-codex');
     // Let native Codex startup finish before starting the fleet; its database
     // maintenance is not an authentication RPC timeout.
