@@ -15,19 +15,18 @@ Target version: deploy-v<date>[.n] — the owner-cut tag names the release, per 
 Target window: unset — no cadence agreed and nothing pending to ship
 Review by: unset
 Candidate: none
-Scope: none — no authorized outcome is unshipped; main since `9157cdd9` carries only Open Autonomy kit
-  tooling, agent configuration and planning bookkeeping through kit 3.4.0 and the Codex worker switch
-  (PRs #42–#68), not product
+Scope: none — no authorized outcome is unshipped; main since `cd9d9daf` carries only Open Autonomy kit
+  tooling, agent configuration and planning bookkeeping through kit 3.18.0 (PRs #42–#72), not product
 Readiness: pending
 Readiness evidence: none yet
-Rationale: everything landed through `9157cdd9` shipped on 2026-09-06 — the owner cut `deploy-v2026.09.06.3`
-  (commit `9157cdd9`) and the deploy run succeeded
+Rationale: everything landed through `cd9d9daf` shipped on 2026-09-06 — the owner cut `deploy-v2026.09.06.3`
+  (commit `cd9d9daf`) and the deploy run succeeded
   (https://github.com/open-autonomy-org/hookline/actions/runs/34065618527). A new decision is due when
   owner-authorized outcomes land.
 Version rationale: releases are the owner's `deploy-v<date>[.n]` tags on the production environment; no
   package version or GitHub-release policy exists.
-Live verification: pending — the deployed instance's address is not recorded anywhere the agent can read,
-  so post-release verification of the live service has no source yet.
-Merge gate: corrected by owner/setup action. The `main-protected` ruleset (id 22374727, re-verified via
-  the GitHub rulesets API on 2026-09-24) requires one approving review, dismisses stale reviews on push,
+Live verification: the deployed instance is `https://hookline.aaron-0ed.workers.dev` (from the deploy run
+  above); it answers, behind authentication.
+Merge gate: the `main-protected` ruleset (id 22374727)
+  requires one approving review, dismisses stale reviews on push,
   and permits no bypass; PRs #65–#68 each carry an approval at their exact landed head.
