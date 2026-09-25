@@ -37,3 +37,26 @@ rails:
   partner:                    # a partner service settling a metered charge against the balance
     max_usd_cents: 0          # the most one charge may be
     partners: []              # the partner ids allowed to settle
+
+team: {
+    "members": [
+      {
+        "id": "owner",
+        "name": "miamiviceroy",
+        "github": {
+          "id": "2255943",
+          "login": "yueranyuan"
+        },
+        "discord": {
+          "id": "605505624226136074",
+          "name": "miamiviceroy"
+        },
+        "scopes": [
+          "owner",
+          "direction",
+          "release-review"
+        ],
+        "source": "Owner's instruction in the coding session of 2026-09-25 (\"go ahead and add me\"): the same verified GitHub yueranyuan (2255943) and Discord miamiviceroy (605505624226136074) as the owner record on open-autonomy-org/open-autonomy's roster (its sourced binding: https://github.com/open-autonomy-org/open-autonomy/pull/460); GitHub GET /user confirms the ID and login."
+      }
+    ]
+  }
