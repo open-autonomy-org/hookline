@@ -1,7 +1,7 @@
 ---
 name: community
-description: Read and answer the project's community, preserve sourced input for the PM scrum, and acknowledge human commitments without assigning unsolicited work.
-version: 2.4.0
+description: Read and answer the project's community, preserve sourced input for the PM scrum, acknowledge human commitments without assigning unsolicited work, and keep every outward channel telling what shipped.
+version: 3.0.0
 metadata:
   hermes:
     tags: [open-autonomy, community, github, discord]
@@ -46,3 +46,8 @@ and moderators unless explicitly delegated.
 The same rules apply to incoming chat: answer there and retain exact source references in session history.
 PM decides whether it warrants a notable change to the shared plan. Owner redirection or urgent overlap can warrant
 requesting an early PM scrum; use its original source and avoid scheduling duplicate runs.
+
+## Outward posts
+
+Release announcements, the dev log and the backer report are the `outreach` skill's, run by their own scheduled
+jobs; this desk answers people. Asks of people follow `project-communications`.

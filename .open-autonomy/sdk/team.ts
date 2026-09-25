@@ -2,22 +2,62 @@
 // section in config.yaml, preserving every byte outside it. No platform account database is authoritative.
 export const TEAM_SCOPES = ['owner', 'direction', 'moderation', 'release-review'] as const;
 export type TeamScope = typeof TEAM_SCOPES[number];
+export const TEAM_DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] as const;
+export type TeamDay = typeof TEAM_DAYS[number];
+/** A weekly window a member expects to be available, in their own time zone: `from` before `to`, both `HH:MM`. */
+export interface TeamWindow { days: TeamDay[]; from: string; to: string }
 export interface TeamMember {
   id: string;
   name: string;
   github?: { id: string; login: string };
   discord?: { id: string; name: string };
+  /** Authority: what the member may decide. */
   scopes: TeamScope[];
   source: string;
+  /** The project's own names for the work the member takes on (`triage`, `docs`, `outreach`); never authority. */
+  roles?: string[];
+  /** What the member gives, in the project's own words: their `time`, and any resource (a `machine` the project's
+   *  Open Autonomy runs on, a `gpu`, a `domain`, a tool's seat). */
+  contributes?: string[];
+  /** When the member expects to be available; absent, nothing is assumed. */
+  availability?: { tz: string; windows: TeamWindow[] };
 }
 export interface Team { members: TeamMember[] }
 const record = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 const label = (v: unknown, max: number): v is string => typeof v === 'string' && v.trim().length > 0 && v.length <= max && !/[\x00-\x1f]/.test(v);
 const id = (v: unknown): v is string => typeof v === 'string' && /^[1-9][0-9]{0,19}$/.test(v);
+const clock = (v: unknown): v is string => typeof v === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(v);
+const zone = (v: unknown): v is string => {
+  if (typeof v !== 'string' || !/^[A-Za-z0-9_+\-/]{1,64}$/.test(v)) return false;
+  try { new Intl.DateTimeFormat('en', { timeZone: v }); return true; } catch { return false; }
+};
+const MEMBER_KEYS = ['id', 'name', 'github', 'discord', 'scopes', 'source', 'roles', 'contributes', 'availability'];
+
+function validateContribution(m: Record<string, unknown>): Pick<TeamMember, 'roles' | 'contributes' | 'availability'> {
+  const out: Pick<TeamMember, 'roles' | 'contributes' | 'availability'> = {};
+  if (m.roles !== undefined) {
+    if (!Array.isArray(m.roles) || m.roles.length > 10 || m.roles.some(r => typeof r !== 'string' || !/^[a-z0-9][a-z0-9-]{0,39}$/.test(r)) || new Set(m.roles).size !== m.roles.length) throw new Error('Roles are at most ten distinct lowercase names (letters, digits, hyphens).');
+    if (m.roles.length) out.roles = m.roles as string[];
+  }
+  if (m.contributes !== undefined) {
+    if (!Array.isArray(m.contributes) || m.contributes.length > 10 || m.contributes.some(c => typeof c !== 'string' || !/^[a-z0-9][a-z0-9-]{0,39}$/.test(c)) || new Set(m.contributes).size !== m.contributes.length) throw new Error('Contributions are at most ten distinct lowercase names (letters, digits, hyphens): time, and each resource given.');
+    if (m.contributes.length) out.contributes = m.contributes as string[];
+  }
+  if (m.availability !== undefined) {
+    const a = m.availability;
+    if (!record(a) || Object.keys(a).some(k => !['tz', 'windows'].includes(k)) || !zone(a.tz) || !Array.isArray(a.windows) || !a.windows.length || a.windows.length > 14) throw new Error('Availability needs an IANA time zone and one to fourteen weekly windows.');
+    const windows = a.windows.map((w): TeamWindow => {
+      if (!record(w) || Object.keys(w).some(k => !['days', 'from', 'to'].includes(k)) || !Array.isArray(w.days) || !w.days.length || w.days.some(d => !TEAM_DAYS.includes(d)) || new Set(w.days).size !== w.days.length || !clock(w.from) || !clock(w.to) || w.from >= w.to) throw new Error('Each availability window names its days and a from time before its to time (HH:MM); a window past midnight is two windows.');
+      return { days: TEAM_DAYS.filter(d => (w.days as string[]).includes(d)), from: w.from, to: w.to };
+    });
+    out.availability = { tz: a.tz, windows };
+  }
+  return out;
+}
 
 export function validateTeamMember(value: unknown): TeamMember {
   const m = value;
-  if (!record(m) || Object.keys(m).some(k => !['id', 'name', 'github', 'discord', 'scopes', 'source'].includes(k)) || !label(m.id, 64) || !/^[a-zA-Z0-9_-]+$/.test(m.id) || !label(m.name, 80) || !label(m.source, 500)) throw new Error('Each member needs a stable record ID, name and source for their identity and authority.');
+  if (!record(m) || Object.keys(m).some(k => !MEMBER_KEYS.includes(k)) || !label(m.id, 64) || !/^[a-zA-Z0-9_-]+$/.test(m.id) || !label(m.name, 80) || !label(m.source, 500)) throw new Error('Each member needs a stable record ID, name and source for their identity and authority.');
   if (!Array.isArray(m.scopes) || m.scopes.some(s => !TEAM_SCOPES.includes(s)) || new Set(m.scopes).size !== m.scopes.length) throw new Error('Unknown or duplicate team authority scope.');
   for (const platform of ['github', 'discord'] as const) {
     const account = m[platform];
@@ -29,7 +69,7 @@ export function validateTeamMember(value: unknown): TeamMember {
   return { id: m.id, name: m.name,
     ...(m.github ? { github: { id: String((m.github as Record<string, unknown>).id), login: String((m.github as Record<string, unknown>).login) } } : {}),
     ...(m.discord ? { discord: { id: String((m.discord as Record<string, unknown>).id), name: String((m.discord as Record<string, unknown>).name) } } : {}),
-    scopes: TEAM_SCOPES.filter(s => (m.scopes as string[]).includes(s)), source: m.source };
+    scopes: TEAM_SCOPES.filter(s => (m.scopes as string[]).includes(s)), source: m.source, ...validateContribution(m) };
 }
 
 export function validateTeam(value: unknown): Team {

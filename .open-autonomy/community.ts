@@ -131,7 +131,8 @@ if (command === 'poll' && doorless) {
 } else if (command === 'issue' && rest[0] === 'update' && /^\d+$/.test(rest[1] ?? '') && rest[2] && rest[3]) {
   if (!/^[a-z0-9_-]+$/i.test(rest[2])) throw new Error('issue update: invalid task id');
   console.log(JSON.stringify(await github('PATCH', `/repos/${account}/issues/${rest[1]}`, { body: `<!-- open-autonomy:blocked:${rest[2]} -->\n${rest[3]}` })));
-} else if (command === 'issue' && rest[0] === 'open' && rest.length === 5) {
+} else if (command === 'issue' && rest[0] === 'open' && (rest.length === 4 || rest.length === 5)) {
+  // An ask as an issue, once per task: to its assignee, or with none, posted as help-wanted (ADR 0013).
   const [, task, title, body, assignee] = rest;
   if (!/^[a-z0-9_-]+$/i.test(task!)) throw new Error('issue open: invalid task id');
   const marker = `<!-- open-autonomy:blocked:${task} -->`;
@@ -142,7 +143,7 @@ if (command === 'poll' && doorless) {
     existing = issues.find((i) => !i.pull_request && i.body?.includes(marker));
     if (existing || issues.length < 100) break;
   }
-  const issue = existing ?? await github('POST', `/repos/${account}/issues`, { title, body: `${marker}\n${body}`, assignees: [assignee] });
+  const issue = existing ?? await github('POST', `/repos/${account}/issues`, { title, body: `${marker}\n${body}`, ...(assignee ? { assignees: [assignee] } : { labels: ['help wanted'] }) });
   console.log(JSON.stringify(issue));
 } else if (command === 'issue' && rest[0] === 'close' && /^\d+$/.test(rest[1] ?? '')) {
   console.log(JSON.stringify(await github('PATCH', `/repos/${account}/issues/${rest[1]}`, { state: 'closed' })));
@@ -212,6 +213,6 @@ if (command === 'poll' && doorless) {
   rmSync(pendingFile);
   console.log(`marked: the last look is now (${cursorFile})`);
 } else {
-  console.error('usage: community poll [pm] | read <repository-relative-api-path> | comment <issue> <text…> | review <pr> approve|request-changes <full-sha> <text…> | discuss <discussion> <text…> | discussion-new <category-slug> <title> <body-file> | mark [pm] | pull-request <kit-branch> | issue open <task> <title> <body> <owner> | issue close <number> | issue remind <number> <body> | issue update <number> <task> <body>');
+  console.error('usage: community poll [pm] | read <repository-relative-api-path> | comment <issue> <text…> | review <pr> approve|request-changes <full-sha> <text…> | discuss <discussion> <text…> | discussion-new <category-slug> <title> <body-file> | mark [pm] | pull-request <kit-branch> | issue open <task> <title> <body> [assignee] | issue close <number> | issue remind <number> <body> | issue update <number> <task> <body>');
   process.exit(2);
 }

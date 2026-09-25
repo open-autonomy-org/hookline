@@ -2,7 +2,7 @@
 // Values travel on Docker stdin, never command arguments or inherited host env.
 import { spawn } from 'node:child_process';
 
-async function python(container: string, script: string, input: unknown, bound = 60_000): Promise<string> {
+async function python(container: string, script: string, input: unknown, bound = 60_000, failed = 'Executor preparation failed; Hermes was not started.'): Promise<string> {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(container)) throw new Error('A container name or ID is required.');
   const child = spawn('docker', ['exec', '-i', '--user', 'hermes', container, '/opt/hermes/.venv/bin/python', '-c', script], { stdio: ['pipe', 'pipe', 'pipe'] });
   child.stdin.on('error', () => {});
@@ -15,7 +15,7 @@ async function python(container: string, script: string, input: unknown, bound =
   const timer = setTimeout(() => child.kill('SIGKILL'), bound);
   try {
     const code = await new Promise<number>(resolve => { child.once('error', () => resolve(1)); child.once('exit', code => resolve(code ?? 1)); });
-    if (code !== 0) throw new Error(`Executor preparation failed; Hermes was not started. ${diagnostic.trim()}`);
+    if (code !== 0) throw new Error(`${failed} ${diagnostic.trim()}`);
     return Buffer.concat(output).toString();
   } finally { clearTimeout(timer); }
 }
@@ -58,6 +58,96 @@ with tempfile.TemporaryDirectory(prefix='oa-home-') as temp:
     # State databases, cron execution state and native .env files belong to the runtime.
     shutil.copytree(source,home,dirs_exist_ok=True,ignore=shutil.ignore_patterns('.env'))
 print(json.dumps({'revision':revision,'dirty':dirty,'config':config,'agent':agent}))
+`, options);
+  return JSON.parse(output);
+}
+
+/**
+ * Where main is now, for a running stack (start.ts's watch, read in the executor): a clean checkout fetches it and names
+ * the files changed since `since`; where any changed, whether the board has a task running or in review (`busy`, null
+ * when the board cannot be read). A checkout with tracked changes is a killed attempt's: nothing is fetched. A started
+ * revision main no longer reaches (a rewritten history) names no files: `changed` is null, and the stack restarts.
+ */
+export async function containerMainMoved(options: { container: string; home: string; workspace: string; since: string }): Promise<{ main?: string; changed: string[] | null; busy?: boolean | null }> {
+  if (!/^[0-9a-f]{40}$/.test(options.since)) throw new Error('The started revision must be a commit id');
+  const output = await python(options.container, String.raw`
+import json,os,pathlib,subprocess,sys
+s=json.load(sys.stdin)
+home=pathlib.Path(s['home']);workspace=pathlib.Path(s['workspace'])
+env={**os.environ,'HOME':str(home),'HERMES_HOME':str(home),'GIT_TERMINAL_PROMPT':'0'}
+def git(*args): return subprocess.check_output(['git','-C',str(workspace),*args],env=env,stderr=subprocess.DEVNULL,timeout=60).decode()
+if git('status','--porcelain','--untracked-files=no').strip(): print(json.dumps({'changed':[]})); sys.exit(0)
+git('fetch','-q','--no-tags','origin','+refs/heads/main:refs/remotes/origin/main')
+main=git('rev-parse','origin/main').strip()
+changed=[]
+if main!=s['since']:
+    diff=subprocess.run(['git','-C',str(workspace),'diff','--name-only',s['since'],main],env=env,capture_output=True,timeout=60)
+    changed=diff.stdout.decode().split() if diff.returncode==0 else None
+busy=None
+if changed is None or changed:
+    board=subprocess.run(['hermes','kanban','list','--json'],cwd=str(workspace),env=env,capture_output=True,timeout=60)
+    try: tasks=json.loads(board.stdout) if board.returncode==0 else None
+    except ValueError: tasks=None
+    if isinstance(tasks,list): busy=any(isinstance(t,dict) and t.get('status') in ('running','review') for t in tasks)
+print(json.dumps({'main':main,'changed':changed,'busy':busy}))
+`, options, 150_000, 'Reading main in the executor failed.');
+  return JSON.parse(output);
+}
+
+/**
+ * For another harness than Hermes (ADR 0009), the persona and skills of the committed `hermes/` in the workers' forms,
+ * rendered into the home inside the executor by the kit's own `renderWorkerForms` (agent.ts, in the image beside Bun), as
+ * the bare start renders them on its host: `AGENTS.md` with `SOUL.md` its link, each skill under `.agents/skills/`.
+ */
+export async function renderContainerWorkerForms(options: { container: string; home: string; workspace: string; revision: string }): Promise<string[]> {
+  const output = await python(options.container, String.raw`
+import io,json,os,pathlib,subprocess,sys,tarfile,tempfile
+s=json.load(sys.stdin)
+home=pathlib.Path(s['home']);workspace=pathlib.Path(s['workspace'])
+env={**os.environ,'HOME':str(home),'GIT_TERMINAL_PROMPT':'0'}
+archive=subprocess.check_output(['git','-C',str(workspace),'archive','--format=tar',s['revision'],'hermes'],env=env,stderr=subprocess.DEVNULL,timeout=30)
+with tempfile.TemporaryDirectory(prefix='oa-forms-') as temp:
+    with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
+        for member in tar.getmembers():
+            assert (member.isfile() or member.isdir()) and not pathlib.PurePosixPath(member.name).is_absolute() and '..' not in pathlib.PurePosixPath(member.name).parts
+        tar.extractall(temp,filter='data')
+    code="import { renderWorkerForms } from '/opt/agent/.open-autonomy/agent.ts'; console.log(JSON.stringify(renderWorkerForms(process.env.OA_FROM, process.env.OA_TO)))"
+    out=subprocess.check_output(['bun','-e',code],env={**env,'OA_FROM':str(pathlib.Path(temp)/'hermes'),'OA_TO':str(home)},timeout=60)
+print(out.decode().strip().splitlines()[-1])
+`, options);
+  return JSON.parse(output);
+}
+
+/**
+ * Codex's own sandbox off in each profile's Codex home. In the executor Codex's bubblewrap cannot make its namespaces
+ * and every command fails (measured: a PM run could run nothing); the executor is the boundary, as for Hermes's own
+ * terminal there. The gate is the profile's approvals: where it keeps them (the treasurer, which pays) the
+ * orchestrator starts its Codex worker with `approval_policy: untrusted`, so Codex asks before every command and
+ * Hermes's approval rule answers (ADR 0009). The key is written at the top of the home's `config.toml`; the
+ * orchestrator's tables are kept.
+ */
+export async function openContainerCodexSandbox(options: { container: string; home: string }): Promise<string[]> {
+  const output = await python(options.container, String.raw`
+import json,pathlib,re,sys,yaml
+s=json.load(sys.stdin)
+home=pathlib.Path(s['home'])
+lines=[]
+for profile in [home]+[p for p in sorted((home/'profiles').glob('*')) if p.is_dir()]:
+    cfg=profile/'config.yaml'
+    doc=(yaml.safe_load(cfg.read_text()) if cfg.exists() else None) or {}
+    raw=(doc.get('approvals') or {}).get('mode')
+    # YAML reads a bare off as false, which Hermes takes as off (tools/approval.py _normalize_approval_mode)
+    mode='off' if raw is False else str(raw or 'manual').strip().lower()
+    codex=profile/'codex'
+    codex.mkdir(parents=True,exist_ok=True)
+    f=codex/'config.toml'
+    text=f.read_text() if f.exists() else ''
+    first=re.search(r'(?m)^\s*\[',text)
+    head,tail=(text[:first.start()],text[first.start():]) if first else (text,'')
+    head=re.sub(r'(?m)^sandbox_mode\s*=.*\n?','',head)
+    f.write_text('sandbox_mode = "danger-full-access"\n'+head+tail)
+    lines.append(f"{profile.name if profile != home else 'home'}: Codex sandbox off; {'approvals off' if mode=='off' else 'approvals '+mode+': Codex asks before every command'}")
+print(json.dumps(lines))
 `, options);
   return JSON.parse(output);
 }
