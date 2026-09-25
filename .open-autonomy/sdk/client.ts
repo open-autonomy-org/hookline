@@ -6,8 +6,8 @@
 // anything else) and, when known, the roadmap item they serve; turns append with an offset so a retry or
 // a reconnect is idempotent; a session ends with an optional outcome. Updates are short progress notes on
 // an item. All of it goes to POST /v1/agent/events as CloudEvents 1.0, one or a batch.
-
 import type { Roadmap } from './roadmap.ts';
+import type { Statement, StatementRevision } from './statements.ts';
 
 export interface ClientOptions {
   baseUrl: string; // e.g. https://open-autonomy.org/v1 (the key valve's forwarded address inside a stack)
@@ -41,6 +41,10 @@ export const DOCS_EVENT_TYPE = 'org.open-autonomy.project.docs';
 export type OperatingState = 'running' | 'paused';
 // A project inherits its org's word (`@<owner>`), paused if either is: `desired` is the effective word, carrying `from`
 // when it is the org's, with the project's own record beside it as `own`.
+// One entry of the operating state's history: the owner's request (`from` the org when it was the org's word; `unchanged`
+// when it asked for the state that already held), or a change of state the automation reported. `backfilled` marks a
+// record from before the history was kept.
+export type ControlEntry = ({ kind: 'request'; state: OperatingState; at: string; by: string; reason?: string; from?: string; unchanged?: true } | { kind: 'report'; state: OperatingState; at: string; note?: string }) & { backfilled?: true };
 export interface AgentControl {
   desired?: { state: OperatingState; at: string; by: string; reason?: string; from?: string };
   observed?: { state: OperatingState; at: string; note?: string };
@@ -198,8 +202,9 @@ export class OpenAutonomy {
     if (!res.ok) { const body = await res.json().catch(() => ({})) as { error?: { code?: string } | string }; const code = typeof body.error === 'string' ? body.error : body.error?.code; throw new ReadError(res.status, code ?? `http_${res.status}`); }
     return await res.json() as T;
   }
-  async sessions(account: string, limit = 30): Promise<{ live: string[]; sessions: SessionSummary[] }> {
-    return this.read(`/accounts/${encodeURIComponent(account)}/sessions?limit=${limit}`);
+  // Newest first; `next`, when there is more, is the `before` of the page after.
+  async sessions(account: string, limit = 30, before?: string): Promise<{ live: string[]; sessions: SessionSummary[]; next?: string }> {
+    return this.read(`/accounts/${encodeURIComponent(account)}/sessions?limit=${limit}${before ? `&before=${encodeURIComponent(before)}` : ''}`);
   }
   async session(account: string, key: string): Promise<SessionRecord | undefined> {
     try { return (await this.read<{ session?: SessionRecord }>(`/accounts/${encodeURIComponent(account)}/sessions/${encodeURIComponent(key)}`)).session; }
@@ -247,6 +252,11 @@ export class OpenAutonomy {
     const { desired, observed, own } = await res.json() as AgentControl;
     return { ...(desired ? { desired } : {}), ...(observed ? { observed } : {}), ...(own ? { own } : {}) };
   }
+  // Every request and every change reported, newest first, a page at a time.
+  //   GET /v1/accounts/:account/state/history?limit=&before=
+  async stateHistory(account: string, limit = 50, before?: string): Promise<{ history: ControlEntry[]; next?: string }> {
+    return this.read(`/accounts/${encodeURIComponent(account)}/state/history?limit=${limit}${before ? `&before=${encodeURIComponent(before)}` : ''}`);
+  }
   // An org at a glance: its own word and bounds, and each listed project under it with its effective word and money.
   //   GET /v1/orgs/:org
   async org(name: string): Promise<OrgView> {
@@ -268,6 +278,10 @@ export class OpenAutonomy {
     if (!res.ok) return undefined;
     return ((await res.json()) as { revision?: RoadmapRevision }).revision;
   }
+  // A page of the history: `next`, when there is more, is the `before` of the page after.
+  async roadmapRevisionPage(account: string, limit = 20, before?: string): Promise<{ revisions: RoadmapRevision[]; next?: string }> {
+    return this.read(`/accounts/${encodeURIComponent(account)}/roadmap/revisions?limit=${limit}${before ? `&before=${encodeURIComponent(before)}` : ''}`);
+  }
   async roadmapRevisions(account: string, limit = 20): Promise<RoadmapRevision[]> {
     const res = await this.fetchImpl(`${this.base}/accounts/${encodeURIComponent(account)}/roadmap/revisions?limit=${limit}`);
     return ((await res.json()) as { revisions?: RoadmapRevision[] }).revisions ?? [];
@@ -279,6 +293,35 @@ export class OpenAutonomy {
     const res = await this.fetchImpl(`${this.base}/agent/roadmap`, { method: 'POST', headers: { authorization: `Bearer ${this.opts.key}`, 'content-type': 'application/json' }, body: JSON.stringify({ source, roadmap, by }) });
     const body = await res.json().catch(() => ({})) as { ok?: boolean; revision?: RoadmapRevision; unchanged?: boolean; error?: { code?: string } };
     return { ok: res.ok && body.ok === true, status: res.status, revision: body.revision, unchanged: body.unchanged, error: body.error?.code };
+  }
+
+  // The owner's statements (ADR 0012): a tool the owner runs publishes its word about the project, shown in the
+  // dashboard's rail under "Stated by the owner" and as a README badge row. Needs the `steer` scope of a project's key.
+  //   POST /v1/agent/statement  (Authorization: Bearer <steer key>)  { id, title, source, as_of, badges, body_md? }
+  //   DELETE /v1/agent/statement/:id
+  async publishStatement(statement: Statement): Promise<WriteResult & { revision?: StatementRevision; unchanged?: boolean; field?: string }> {
+    const res = await this.fetchImpl(`${this.base}/agent/statement`, { method: 'POST', headers: { authorization: `Bearer ${this.opts.key}`, 'content-type': 'application/json' }, body: JSON.stringify(statement) });
+    const body = await res.json().catch(() => ({})) as { ok?: boolean; revision?: StatementRevision; unchanged?: boolean; field?: string; error?: { code?: string } | string };
+    return { ok: res.ok && body.ok === true, status: res.status, revision: body.revision, unchanged: body.unchanged, ...(body.field ? { field: body.field } : {}), error: typeof body.error === 'string' ? body.error : body.error?.code };
+  }
+  async withdrawStatement(id: string): Promise<WriteResult & { revision?: StatementRevision }> {
+    const res = await this.fetchImpl(`${this.base}/agent/statement/${encodeURIComponent(id)}`, { method: 'DELETE', headers: { authorization: `Bearer ${this.opts.key}` } });
+    const body = await res.json().catch(() => ({})) as { ok?: boolean; revision?: StatementRevision; error?: { code?: string } | string };
+    return { ok: res.ok && body.ok === true, status: res.status, revision: body.revision, error: typeof body.error === 'string' ? body.error : body.error?.code };
+  }
+  //   GET /v1/accounts/:account/statements            the live statements
+  //   GET /v1/accounts/:account/statements/:id/revisions?limit=   every change, newest first
+  //   GET /v1/accounts/:account/statements/:id/badges.svg         the badge row, for a README
+  // As read: `badges` are the ones standing today, `lapsed` those past their `until`.
+  async statements(account: string): Promise<Array<Statement & { lapsed: Statement['badges'] }>> {
+    return (await this.read<{ statements: Array<Statement & { lapsed: Statement['badges'] }> }>(`/accounts/${encodeURIComponent(account)}/statements`)).statements;
+  }
+  // A page of one statement's revisions: `next`, when there is more, is the `before` of the page after.
+  async statementRevisionPage(account: string, id: string, limit = 20, before?: string): Promise<{ revisions: StatementRevision[]; next?: string }> {
+    return this.read(`/accounts/${encodeURIComponent(account)}/statements/${encodeURIComponent(id)}/revisions?limit=${limit}${before ? `&before=${encodeURIComponent(before)}` : ''}`);
+  }
+  async statementRevisions(account: string, id: string, limit = 20): Promise<StatementRevision[]> {
+    return (await this.read<{ revisions: StatementRevision[] }>(`/accounts/${encodeURIComponent(account)}/statements/${encodeURIComponent(id)}/revisions?limit=${limit}`)).revisions;
   }
 }
 

@@ -14,7 +14,8 @@
 import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, relative, resolve } from 'node:path';
 
-type Package = { schema_version: 1; inference?: { models?: Record<string, { provider?: string }> }; jobs?: Record<string, unknown>; extensions?: Record<string, { config?: Record<string, unknown> }> };
+type Model = { provider?: string; model?: string; endpoint?: string; base_url?: string; credential?: string; placeholder_key?: string };
+type Package = { schema_version: 1; inference?: { models?: Record<string, Model>; default?: string }; jobs?: Record<string, unknown>; extensions?: Record<string, { config?: Record<string, unknown> }> };
 export type Setup = { harness?: string; profiles: Record<string, Package> };
 
 const PROFILE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
@@ -96,7 +97,7 @@ function skillDirs(tree: string): string[] {
   return found;
 }
 
-export function agentModels(setup: Setup | null): Array<{ provider?: string }> {
+export function agentModels(setup: Setup | null): Model[] {
   return Object.values(setup?.profiles ?? {}).flatMap((p) => Object.values(p.inference?.models ?? {}));
 }
 
