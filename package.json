@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "bunx wrangler dev",
-    "check": "bunx tsc --noEmit"
+    "check": "./node_modules/.bin/tsc --noEmit"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260601.0",
