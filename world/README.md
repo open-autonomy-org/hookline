@@ -3,13 +3,16 @@
 The Worker under `wrangler dev`, twins of the vendors that send webhooks (Stripe, GitHub, Polar), and a twin app as the
 target that records what the inbox forwards. No account, no key, no cloud. Nothing in the world calls a real API.
 
+Run from the repository root. The locked `@volter/twin-world` dependency supplies the World CLI;
+the commands below invoke its installed executable directly.
+
 ```bash
-bun install
-bunx volter-world up world/world.json --name hookline --env-file .volter/world.env   # twins, the target, the Worker
-bunx volter-world env hookline -- sh -c 'curl -s $HOOKLINE_URL/healthz'               # anything, inside the world
-bunx volter-world env hookline -- sh -c 'curl -s $TARGET_URL/received'                # what the target received
-bunx volter-world tail hookline --no-follow                                           # the twins' ledgers: what they saw
-bunx volter-world down hookline --purge
+bun install --frozen-lockfile
+./node_modules/.bin/volter-world up world/world.json --name hookline --env-file .volter/world.env   # twins, the target, the Worker
+./node_modules/.bin/volter-world env hookline -- sh -c 'curl -s $HOOKLINE_URL/healthz'               # anything, inside the world
+./node_modules/.bin/volter-world env hookline -- sh -c 'curl -s $TARGET_URL/received'                # what the target received
+./node_modules/.bin/volter-world tail hookline --no-follow                                         # the twins' ledgers: what they saw
+./node_modules/.bin/volter-world down hookline --purge
 ```
 
 A vendor's webhooks come from its twin the way they come from the vendor. Stripe: enrol an endpoint on the twin
