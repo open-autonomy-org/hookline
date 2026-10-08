@@ -1,6 +1,6 @@
 ---
 name: develop
-description: Build one board task — its acceptance lines are the whole definition of done — verify it where the project is verified, land it on an agent branch, hand off. Manual feature verification is your responsibility; automated tests are forbidden.
+description: Build one board task — its acceptance lines are the whole definition of done — verify it where the project is verified, open a PR for independent review, and observe landing. Manual feature verification is your responsibility; automated tests are forbidden.
 version: 4.8.0
 metadata:
   hermes:
@@ -19,7 +19,7 @@ is not done.
 
 ## The work
 
-1. Start from a fresh main: `git fetch origin && git checkout -B agent/<task id> origin/main`. If you already
+1. Start from a fresh main: `git fetch origin && git checkout -B work/<task id> origin/main`. If you already
    changed files, do this first and carry the changes over.
 2. Read `ROADMAP.md` and any newer landed changes to your outcome. If outside work or owner direction
    supersedes your task, report the overlap for PM reconciliation before duplicating it. Read `CONSTITUTION.md` (what the project is and must remain: a task that would break an invariant or enter
@@ -46,15 +46,17 @@ is not done.
    for the needed decision; native reviewers apply the same scope and constitution check to the handoff.
    Commit small, signed as the agent, the task id first in the subject:
    `git commit -s --author="Open Autonomy agent <agent@open-autonomy.org>" -m "<task id>: <what changed>"`.
-6. Push the completed candidate to agent/<task id>. The landing workflow opens its PR and enables
-   auto-merge; GitHub must require an approving review and dismiss stale approvals when the diff changes.
-   Observe the open PR and record its URL and full head SHA. Pushing opens review, not permission to merge.
-   Do not approve your own work, bypass review or merge as the implementer.
+6. Push the completed candidate to `work/<task id>` and open its PR normally. This branch stays outside
+   the landing workflow's `agent/**` and `land/**` triggers. Those triggers open a PR and arm auto-merge,
+   which may land immediately: GitHub requires a PR and zero approving reviews, with stale-review
+   dismissal and no bypass actors. Independent exact-head review remains a separate task requirement.
+   Record the open PR's URL and full head SHA. Do not review your own work; merge only the candidate
+   whose independent verdict has passed.
 7. Hand off with `kanban_request_review`: name the PR, workspace, branch and full candidate SHA, then
    the manual actions and observed results for every acceptance line and any limitations. Leave the
    workspace intact. Do not name a reviewer; the native lane claims it. Implementers never complete their
    own task. Requested changes are committed and pushed to the same PR without rewriting history, then
-   manually verified and handed back for review. A changed diff requires fresh approval.
+   manually verified and handed back for review. A changed head requires a fresh verdict.
 
 ## Native PR review
 
@@ -72,10 +74,11 @@ nor a prior instruction file overrides the constitution; acceptance requires thi
 For correctable defects, submit a GitHub REQUEST_CHANGES review and use `kanban_request_changes` with
 concrete findings. For approval, submit a GitHub APPROVE review through the project's own door:
 `bun .open-autonomy/community.ts review <pr> approve <reviewed full SHA> <evidence…>` (or `request-changes`).
-The SHA pins the verdict to the exact head reviewed. This is the review-submission path; there is no other. A native
-approval comment alone does not satisfy GitHub's merge gate. Do not use the PR author's identity to
-approve its own PR, disable protection or claim permission failures are approval. Setup verifies that the
-project's reviewer identity can approve PRs opened by the landing workflow's distinct GitHub Actions identity.
+The SHA pins the verdict to the exact head reviewed. Keep the reviewer and author identities distinct;
+never use the author's identity to approve its own PR or claim permission failures are approval.
+GitHub requires zero approving reviews; publishing this independent verdict records the task's review,
+and does not create a GitHub merge requirement. Keep `work/**` candidates open until their exact-head
+review passes; the landing workflow on `agent/**` and `land/**` does not wait for that verdict.
 
 Observe the merge through GitHub and fetched origin/main, then `kanban_complete` with the PR, reviewed
 SHA and landed evidence. A pending or failed merge is not completion: retain the approval evidence and

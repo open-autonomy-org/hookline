@@ -300,7 +300,9 @@ execution. PM coordinates; it doesn't implement.
 - Run `bun .open-autonomy/maintain.ts upgrade`, then `restart` for idle kit maintenance. The upgrade merges the
   kit's change into this project's files three-way; a file where both moved is left with conflict markers in
   the upgrade worktree for you to resolve, keeping this project's intent and the kit's change. Every upgrade PR,
-  including workflow changes, goes through independent exact-head agent review and automatic merge.
+  including workflow changes, needs independent exact-head agent review. The landing workflow on
+  `agent/**` and `land/**` may merge before that verdict; use `work/**` and open its PR normally when
+  the candidate must stay open through review.
   The supervisor drains and restarts after landing. Human approval is reserved for release of the exact candidate.
 
 Report notable changes, queue decisions, pending commitments/release gates, source gaps and installed/running

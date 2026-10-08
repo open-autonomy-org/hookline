@@ -489,7 +489,7 @@ directory with owner-only permissions. Existing credential files must be regular
 
 | Connection | Setup and credential handoff | Proof before completion |
 |---|---|---|
-| GitHub repository | Verify the owner and repository; the helper generates and registers a repository-scoped SSH push key | The agent's key can push its branch; main requires agent review; release requires human approval |
+| GitHub repository | Verify the owner and repository; the helper generates and registers a repository-scoped SSH push key | The agent's key can push its branch; main requires a PR with zero approving reviews; independent exact-head review remains a task requirement; release requires human approval |
 | Project GitHub App | The browser agent handles registration and installation; the standalone credential receiver only saves the key; verify access through the running valve | Through the app/valve, read this repository's issues, PR reviews/checks, workflows and release records |
 | Open Autonomy platform | The key tool prepares a repository-control claim; the setup agent lands it through normal Git/PR tools, then reruns setup to provision developer/treasurer credentials into protected host storage | The project account is correct and the actual reporting/model arrangement works |
 | Optional communication provider | Guide the chosen provider's application setup, scopes and installation; use protected page capture for displayed credentials, or secure entry when capture is unavailable | Read the agreed history, deliver to the agreed destination, and recognize the owner's reply |
@@ -593,8 +593,10 @@ For an existing App, compare its registration AND installed grant with the compl
 missing permissions together, and accept the update on the existing installation. Registration changes
 do not upgrade an installation until accepted. Reuse the App, installation and protected credential;
 no reinstall or key replacement is needed. Record the verified grant in the existing setup record.
-Verify the first real contribution can push, receive a separate agent's GitHub approval and auto-merge
-before declaring setup complete. Use manual operation, never automated tests or synthetic test PRs.
+Verify the first real contribution can open a PR, receive an independent exact-head verdict and merge
+before declaring setup complete. Use a `work/**` branch to keep it open through review; `agent/**` and
+`land/**` arm auto-merge without waiting for that verdict. Use manual operation, never automated tests
+or synthetic test PRs.
 The browser agent handles the form and logo upload; the tool does not generate the manifest or navigate.
 
 For the local host runtime, keep the canonical GitHub origin and configure Git's native URL rewriting
@@ -719,21 +721,19 @@ For bare deployments using a deploy key, setup also checks on reruns that it rem
 disabled or read-only key requires the setup agent to reconcile the intended access; setup does not
 restore a revoked registration or expand existing permissions automatically.
 
-Before activation, inspect effective main rules: require at least one approving PR review, dismiss stale
-approvals when a diff changes, retain existing stronger protections and permit no agent bypass. Existing
-rulesets are preserved by setup helpers, so the setup agent must reconcile an older zero-review rule.
-Keep the PR author and reviewer identities distinct: the landing workflow opens PRs as GitHub Actions;
-the project's GitHub App needs pull_requests write to submit the native reviewer's verdict. Verify that
-this reviewer can supply a qualifying approval without requiring a human for every development PR.
-Do not require approval from the last pusher when that would make the shared project App unable to act
-as reviewer; independent Hermes sessions provide the worker/reviewer separation. Human release approval
-remains a separate authority requirement. Verify this flow using the actual first contribution, not a
-synthetic test PR or automated tests.
+Before activation, inspect effective main rules: require a PR and zero approving reviews, dismiss stale
+reviews on push, protect deletion and history, and permit no bypass actors. There are no required status
+checks, code-owner reviews or last-push approvals. Existing rulesets are preserved by setup helpers;
+verify that the effective repository and organization rules match this policy. Keep the PR author and
+reviewer identities distinct. The project's GitHub App needs pull_requests write to publish the native
+reviewer's verdict; that verdict remains a separate task requirement. Use `work/**` for a candidate
+that must stay open through its independent review. Human release approval remains a separate authority
+requirement. Verify this flow using the actual first contribution, not a synthetic test PR or automated tests.
 
 Repository policy has no CODEOWNERS or human development-review gate, including workflow changes.
 Remove inherited CODEOWNERS files from root, `.github/` and `docs/` through the normal PR process and
-reconcile all effective main rules to disable code-owner review while retaining independent agent
-approval, stale-review dismissal and no bypass. Do not regenerate CODEOWNERS during setup or upgrades.
+reconcile all effective main rules to disable code-owner review while retaining independent exact-head
+review in the task process, stale-review dismissal and no bypass actors. Do not regenerate CODEOWNERS during setup or upgrades.
 The helper only prepares absent rulesets; the setup agent verifies and reconciles existing repository
 and inherited organization rules under the agreed policy before activation. Keep human release reviewers
 and production environment gates. Development code receives no production keys; release approval covers
@@ -751,9 +751,11 @@ and verify that its Actions settings permit the landing workflow to create pull 
 `repos/<owner>/<repo>/actions/permissions/workflow` through `gh api`; the GitHub setting named
 `can_approve_pull_request_reviews` governs Actions creating and approving PRs. Configure the agreed setting
 through the owner's repository administration, preserving other workflow permissions and organization policy.
-The landing workflow never submits approvals: the independent agent review requirement still applies.
+The landing workflow never submits approvals. Independent exact-head review remains a separate task requirement.
 If organization policy prevents these settings, resolve that with the owner before claiming landing works.
-The workflow arms native auto-merge so a required review can arrive after its run has finished.
+The workflow on `agent/**` and `land/**` arms native auto-merge and may land immediately under the
+zero-review rule, before the independent verdict. Use `work/**` and open its PR normally to keep a
+candidate open until that review passes.
 
 Land the completed project-owned agreement and configuration before starting Hermes. Start it as the final
 setup action, then verify the loaded home, native schedules, actual human contact path and host restart

@@ -7,11 +7,13 @@ without requiring a hosted service.
 
 ## The shape
 
-- **Landing follows independent agent review.** The developer pushes `agent/<task>`; the landing workflow
-  opens a PR and arms auto-merge. A separate reviewer approves the current PR head after constitution,
-  scope and manual feature verification review. Changed diffs invalidate stale approvals. All code,
-  including workflows, follows this process; there is no CODEOWNERS or human development-review gate.
-  Nothing pushes `main` directly, maintainers included (`main-protected`: PR required, no bypass).
+- **Independent review is a task requirement.** The developer pushes `work/<task>`, opens a PR and obtains
+  a separate review of its exact head for constitution, scope and manual feature verification. A changed
+  head needs a new verdict; confirm actual landing before completing the task. GitHub requires a PR and
+  zero approving reviews, with stale-review dismissal and no bypass actors. Pushes to `agent/**` or
+  `land/**` open a PR and arm auto-merge, which may land before the independent verdict. `work/**` stays
+  outside those triggers. There is no CODEOWNERS or human development-review gate. Nothing pushes
+  `main` directly, maintainers included.
 - **Credentials stay outside development.** Agents and development code do not receive production keys;
   the host valve supplies scoped development access. Human approval gates release of the exact candidate,
   when production credentials may be used, rather than each merge to main.
@@ -26,8 +28,9 @@ without requiring a hosted service.
 ## Setting it up, once per project
 
 1. No CODEOWNERS files (including root, `.github/` and `docs/` locations).
-2. Ruleset `main-protected` on `refs/heads/main`: `pull_request` (1 approving agent review, stale approvals
-   dismissed on push, code-owner review disabled), `non_fast_forward`, `deletion`; no bypass actors.
+2. Ruleset `main-protected` on `refs/heads/main`: `pull_request` (0 approving reviews, stale approvals
+   dismissed on push, code-owner and last-push approval disabled), `non_fast_forward`, `deletion`; no
+   bypass actors or required status checks. Independent exact-head review remains in the task process.
    Enable repository auto-merge and allow the landing workflow to open PRs.
 3. Ruleset `deploy-tags-admin-only` on `refs/tags/deploy-v*`: `creation`, `update`, `deletion`; bypass:
    OrganizationAdmin, always.

@@ -84,7 +84,8 @@ outcome or implementation dispatch. Reuse its card on later revisions; never cre
 or approve the PR from the authoring session. Preserve the worktree until review and landing complete.
 
 
-Work in a separate ordinary Git worktree on agent/strategy-<unique-id> off fresh origin/main. Preserve
+Work in a separate ordinary Git worktree on work/strategy-<unique-id> off fresh origin/main. This branch
+stays outside the `agent/**` and `land/**` triggers that arm automatic landing. Preserve
 and resume your unfinished branch; never edit PM's scrum worktree or its cursors/notepad. Use normal Git
 review and landing, checking the constitution before proposing and again against the final diff before
 push. Reconcile concurrent PM edits against current main instead of overwriting progress or release

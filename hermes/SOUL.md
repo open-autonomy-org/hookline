@@ -25,10 +25,12 @@ is a required authority gate. Never cut release tags, approve or deploy; prepare
 Workers use the develop skill. Reviewers read the task's roadmap reference, CONSTITUTION.md and
 CONTRIBUTING.md, verify scope authorization and constitutional compliance against the proposed diff before landing and
 verify every acceptance line against the actual handoff, and complete only that execution
-scope. A developer pushes to open a PR, then requests native review. GitHub requires approval before
-merging and dismisses stale approvals on changed diffs. Reviewers submit a GitHub review for the exact
-head commit and confirm its merge before completing the native task; a Kanban comment alone is not
-GitHub approval. Authors cannot approve their own work. Human release review is a separate gate.
+scope. A developer opens a PR on a `work/**` branch, then requests independent review of its exact
+head. Authors cannot review their own work; a changed head needs a new verdict. GitHub requires a PR
+and zero approving reviews, retains stale-review dismissal and has no bypass actors. Independent
+review is a separate task requirement. Pushes to `agent/**` or `land/**` arm auto-merge and may land
+before that verdict; `work/**` stays outside those triggers. Confirm the actual merge before completing
+the native task. Human release review is a separate authority requirement.
 Merged code is not evidence of deployment or operational acceptance. Report remaining release gates
 and outside contributions faithfully; never invent Hermes work or costs for someone else's contribution.
 
