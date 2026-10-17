@@ -1,7 +1,7 @@
 // The project's agent setup (docs/decisions/0007): `.open-autonomy/agent.json` declares each profile's
-// Inference, jobs and Hermes-only settings; Supercode's applier renders them into the Hermes home before
-// the gateway starts, through Hermes's own functions, owning each record by its Hermes id against a base
-// kept beside the home. Content (the persona, skills, plugins, scripts) is copied from hermes/ as before.
+// inference, jobs and selected runtime settings. Hermes uses its explicit external door;
+// native-setup.ts maps the bounded orchestrator declaration through public owning model/job doors.
+// The external applier owns record IDs and base comparisons. Content is rendered separately.
 //
 //   readAgent(project)          the package, or null for a project still on the committed config
 //   parseAgent(text, where)     the same checks over a setup read anywhere else
@@ -9,14 +9,33 @@
 //   applyAgent({...})           per profile: adopt the jobs a home already has (the seed hook's, once),
 //                               provision a new home, then apply; returns the lines the start logs
 //   agentHarness(setup)         the harness the owner picks: `hermes` (the default) runs itself; any other runs as
-//                               Supercode's orchestrator's worker on the same home (ADR 0007, as amended)
+//                               Volter Harness's orchestrator's worker on the same home (ADR 0007, as amended)
 //   renderWorkerForms(from, to) that target's content: the persona and skills in the workers' forms
 import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, relative, resolve } from 'node:path';
 
-type Model = { provider?: string; model?: string; endpoint?: string; base_url?: string; credential?: string; placeholder_key?: string };
-type Package = { schema_version: 1; inference?: { models?: Record<string, Model>; default?: string }; jobs?: Record<string, unknown>; extensions?: Record<string, { config?: Record<string, unknown> }> };
-export type Setup = { harness?: string; profiles: Record<string, Package> };
+export type Model = { provider?: string; model?: string; endpoint?: string; base_url?: string; credential?: string; placeholder_key?: string; api_mode?: string };
+export type Package = { schema_version: 1; inference?: { models?: Record<string, Model>; default?: string; unattended?: string }; jobs?: Record<string, unknown>; extensions?: Record<string, { config?: Record<string, unknown> }> };
+/**
+ * An agent with a mailbox (supercode docs/adr/0008-agent-mailbox.md): its main session runs `profile` in a pane the
+ * start opens once (`program`, `claude` or `codex`), declared with supercode so roots addressed to the agent reach it.
+ * `owners_account_manager` makes it the owner's account manager (RFC 0020 decision 17); `channel.rh2` carries its
+ * account Room to its mailbox (decisions 24-25), the Room opened for `principal` (an RH2 principal id) when the
+ * organization has none with its key.
+ */
+export type MailAgent = {
+  profile: string;
+  program?: string;
+  idle_minutes?: number;
+  owners_account_manager?: boolean;
+  /** Explicitly request an instance pinned to every enrolled machine. The fleet resource manager does not request this. */
+  every_machine?: boolean;
+  /** Mailed the machine-health alarms of this machine and of every machine enrolled in its Teams context,
+   *  at the same retained host agent address (supercode sdk/health: a native reading, named with its release). */
+  health_alarms?: boolean;
+  channel?: { rh2?: { principal?: string; room?: string; room_key?: string; room_name?: string }; slack?: { channels?: string[] }; jira?: { site?: string; jql?: string } };
+};
+export type Setup = { harness?: string; profiles: Record<string, Package>; agents?: Record<string, MailAgent> };
 
 const PROFILE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 
@@ -29,8 +48,15 @@ export function readAgent(project: string): Setup | null {
 export function parseAgent(text: string, where: string): Setup {
   const setup = JSON.parse(text) as Setup;
   if (!setup?.profiles?.default) throw new Error(`${where}: a setup declares at least the default profile`);
-  for (const name of Object.keys(setup.profiles)) if (!PROFILE.test(name)) throw new Error(`${where}: ${name} is not a Hermes profile name`);
+  for (const name of Object.keys(setup.profiles)) if (!PROFILE.test(name)) throw new Error(`${where}: ${name} is not a valid profile name`);
   if (setup.harness !== undefined && !/^[a-z][a-z0-9-]{0,31}$/.test(String(setup.harness))) throw new Error(`${where}: harness ${JSON.stringify(setup.harness)} is not a harness id`);
+  for (const [name, agent] of Object.entries(setup.agents ?? {})) {
+    if (!PROFILE.test(name)) throw new Error(`${where}: agent ${name} is not an agent name`);
+    if (!agent || !setup.profiles[agent.profile]) throw new Error(`${where}: agent ${name} runs profile ${agent?.profile}, which the setup does not declare`);
+    if (agent.program !== undefined && !['claude', 'codex'].includes(agent.program)) throw new Error(`${where}: agent ${name}'s program is claude or codex`);
+    if (agent.idle_minutes !== undefined && !(Number.isInteger(agent.idle_minutes) && agent.idle_minutes > 0)) throw new Error(`${where}: agent ${name}'s idle_minutes is a whole number of minutes`);
+  }
+  if (Object.values(setup.agents ?? {}).filter((agent) => agent.owners_account_manager).length > 1) throw new Error(`${where}: one agent at most is the owner's account manager`);
   return setup;
 }
 
@@ -38,9 +64,18 @@ export function agentHarness(setup: Setup | null): string {
   return setup?.harness ?? 'hermes';
 }
 
+/** The worker one profile runs: its own `worker.harness` where it names one (docs/decisions/0017), else the setup's. */
+export function profileHarness(setup: Setup | null, profile: string): string {
+  const native = setup?.profiles?.[profile]?.extensions?.orchestrator?.config?.['worker.harness'];
+  const legacy = setup?.profiles?.[profile]?.extensions?.hermes?.config?.['worker.harness'];
+  if (native !== undefined && legacy !== undefined && native !== legacy) throw new Error(`${profile}: conflicting native and legacy worker harness`);
+  const own = native ?? legacy;
+  return typeof own === 'string' && own ? own : agentHarness(setup);
+}
+
 /**
  * The persona and skills of hermes/ (at `from`) in the workers' forms, into the home at `to` and each of its
- * profiles (docs/plans/hermes-compat.md in Supercode, row 15): `SOUL.md` as `AGENTS.md`, with `SOUL.md` a link to
+ * profiles (docs/plans/hermes-compat.md in Volter Harness, row 15): `SOUL.md` as `AGENTS.md`, with `SOUL.md` a link to
  * it; each skill, flat or under a category, as `.agents/skills/<name>/`, its copy under `skills/` removed. The kit's
  * rendering is mirrored: a skill it rendered last time and the checkout no longer has leaves (`.agents/skills/
  * .open-autonomy-rendered` names them). What the agent wrote itself stays; the orchestrator adopts it at load.
@@ -52,7 +87,8 @@ export function renderWorkerForms(from: string, to: string): string[] {
   if (existsSync(profiles)) for (const name of readdirSync(profiles)) if (lstatSync(resolve(profiles, name)).isDirectory()) pairs.push([resolve(profiles, name), resolve(to, 'profiles', name)]);
   for (const [src, home] of pairs) {
     mkdirSync(home, { recursive: true });
-    const soul = resolve(src, 'SOUL.md');
+    // The persona: the IR's native AGENTS.md where the folder has one (docs/decisions/0017), else Hermes's SOUL.md.
+    const soul = existsSync(resolve(src, 'AGENTS.md')) ? resolve(src, 'AGENTS.md') : resolve(src, 'SOUL.md');
     if (existsSync(soul)) {
       writeFileSync(resolve(home, 'AGENTS.md'), readFileSync(soul));
       rmSync(resolve(home, 'SOUL.md'), { force: true });
@@ -110,14 +146,23 @@ export async function applyAgent(options: {
   setup: Setup; homeOf: (profile: string) => string; homeId: string; stateRoot: string; workspace: string; container?: string;
   /** Bare mode's privilege drop (setpriv): what Hermes writes into the home stays the agent's. */
   asAgent?: string[];
+  runtime?: { kind: 'hermes' | 'orchestrator'; root: string };
 }): Promise<string[]> {
-  const applier = await import('@volter-ai-dev/supercode-orchestrator/apply');
-  const doors = await import('@volter-ai-dev/supercode-orchestrator/apply/doors');
+  if (options.runtime?.kind === 'orchestrator') {
+    if (options.container) throw new Error('Native setup has no reviewed container model door; use the bare native keeper');
+    const { applyNative } = await import('./native-setup.ts');
+    return applyNative({ ...options, root: options.runtime.root });
+  }
+  // the machine's orchestrator (machine-supercode.ts)
+  const { orchestratorModule } = await import('./machine-supercode.ts');
+  const applier = await import(orchestratorModule('./apply'));
+  const doors = await import(orchestratorModule('./apply/doors'));
   const lines: string[] = [];
   const harness = agentHarness(options.setup);
   for (const [profile, declared] of Object.entries(options.setup.profiles)) {
     // another harness than Hermes is each profile's worker: the orchestrator's `worker:` key, which Hermes keeps
-    const spec: Package = harness === 'hermes' ? declared : { ...declared, extensions: { ...declared.extensions, hermes: { ...declared.extensions?.hermes, config: { ...declared.extensions?.hermes?.config, 'worker.harness': harness } } } };
+    // a profile that names its own worker keeps it (the IR kit's coder-codex and coder-claude, docs/decisions/0017)
+    const spec: Package = harness === 'hermes' ? declared : { ...declared, extensions: { ...declared.extensions, hermes: { ...declared.extensions?.hermes, config: { ...declared.extensions?.hermes?.config, 'worker.harness': declared.extensions?.hermes?.config?.['worker.harness'] ?? harness } } } };
     const home = options.homeOf(profile);
     // a named profile's home is made by its content (hermes/profiles/<name>/, copied in before this); Hermes's cron
     // never makes one, so a declared profile without it is said here, not as Hermes's missing cron directory
